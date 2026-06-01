@@ -1,0 +1,78 @@
+{
+  "name": "shogo-vscode",
+  "displayName": "Shogo Chat",
+  "description": "Chat with a Shogo Cloud agent right inside VS Code, with your workspace as context.",
+  "version": "0.0.1",
+  "publisher": "your-team",
+  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-team/shogo-vscode"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "AI",
+    "Chat",
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "shogo-sidebar",
+          "title": "Shogo",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "shogo-sidebar": [
+        {
+          "type": "webview",
+          "id": "shogo.chatView",
+          "name": "Chat"
+        }
+      ]
+    },
+    "commands": [
+      { "command": "shogo.setApiKey", "title": "Shogo: Set API Key" },
+      { "command": "shogo.clearApiKey", "title": "Shogo: Clear API Key" },
+      { "command": "shogo.newChat", "title": "Shogo: New Chat", "icon": "$(add)" }
+    ],
+    "menus": {
+      "view/title": [
+        { "command": "shogo.newChat", "when": "view == shogo.chatView", "group": "navigation" }
+      ]
+    },
+    "configuration": {
+      "title": "Shogo",
+      "properties": {
+        "shogo.model": { "type": "string", "default": "claude-sonnet-4-5", "description": "The Shogo Cloud model ID to use for chat." },
+        "shogo.includeActiveFile": { "type": "boolean", "default": true, "description": "Include the active file and selection as context in each message." },
+        "shogo.apiUrl": { "type": "string", "default": "", "description": "Override the Shogo Cloud API base URL (leave blank to use the SDK default)." }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "package": "node esbuild.js --production && vsce package --no-dependencies",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@shogo-ai/sdk": "^1.9.0",
+    "ai": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^2.24.0",
+    "esbuild": "^0.21.0",
+    "typescript": "^5.4.0"
+  }
+}
