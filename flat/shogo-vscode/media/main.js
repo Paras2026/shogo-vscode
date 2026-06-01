@@ -26,12 +26,19 @@
   function addMessage(role, text) {
     const wrap = document.createElement("div");
     wrap.className = "msg " + role;
+
     const roleEl = document.createElement("div");
     roleEl.className = "role";
-    roleEl.textContent = role === "user" ? "You" : role === "error" ? "Error" : "Shogo";
+    roleEl.textContent = role === "user" ? "You" : role === "error" ? "Error" : role === "tool" ? "Tool" : "Shogo";
+
     const bubble = document.createElement("div");
     bubble.className = "bubble";
-    if (role === "assistant") { bubble.innerHTML = ""; } else { bubble.textContent = text; }
+    if (role === "assistant") {
+      bubble.innerHTML = "";
+    } else {
+      bubble.textContent = text;
+    }
+
     wrap.appendChild(roleEl);
     wrap.appendChild(bubble);
     messagesEl.appendChild(wrap);
@@ -41,7 +48,9 @@
 
   function send() {
     const text = inputEl.value.trim();
-    if (!text || streaming) { return; }
+    if (!text || streaming) {
+      return;
+    }
     inputEl.value = "";
     vscode.postMessage({ type: "prompt", text: text });
   }
@@ -51,7 +60,10 @@
   setKeyBtn.addEventListener("click", () => vscode.postMessage({ type: "setKey" }));
 
   inputEl.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      send();
+    }
   });
 
   window.addEventListener("message", (event) => {
@@ -77,12 +89,20 @@
         }
         break;
       case "assistantEnd":
-        if (currentAssistantEl) { currentAssistantEl.classList.remove("cursor"); }
+        if (currentAssistantEl) {
+          currentAssistantEl.classList.remove("cursor");
+        }
         currentAssistantEl = null;
         setStreaming(false);
         break;
+      case "toolActivity":
+        addMessage("tool", msg.text);
+        break;
       case "error":
-        if (currentAssistantEl) { currentAssistantEl.classList.remove("cursor"); currentAssistantEl = null; }
+        if (currentAssistantEl) {
+          currentAssistantEl.classList.remove("cursor");
+          currentAssistantEl = null;
+        }
         addMessage("error", msg.text);
         setStreaming(false);
         break;
@@ -96,21 +116,37 @@
   });
 
   function escapeHtml(s) {
-    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    return s
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
   }
 
+  // Minimal, safe Markdown renderer: fenced code, inline code, bold, links, line breaks.
   function renderMarkdown(src) {
     const codeBlocks = [];
     let text = src.replace(/```(\w*)\n?([\s\S]*?)```/g, (_m, lang, code) => {
       const idx = codeBlocks.length;
-      codeBlocks.push('<pre><code class="language-' + escapeHtml(lang) + '">' + escapeHtml(code.replace(/\n$/, "")) + "</code></pre>");
+      codeBlocks.push(
+        '<pre><code class="language-' +
+          escapeHtml(lang) +
+          '">' +
+          escapeHtml(code.replace(/\n$/, "")) +
+          "</code></pre>"
+      );
       return "\u0000CODE" + idx + "\u0000";
     });
+
     text = escapeHtml(text);
+
     text = text.replace(/`([^`\n]+)`/g, (_m, c) => "<code>" + c + "</code>");
     text = text.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-    text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2">$1</a>');
+    text = text.replace(
+      /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
+      '<a href="$2">$1</a>'
+    );
     text = text.replace(/\n/g, "<br/>");
+
     text = text.replace(/\u0000CODE(\d+)\u0000/g, (_m, i) => codeBlocks[Number(i)]);
     return text;
   }
