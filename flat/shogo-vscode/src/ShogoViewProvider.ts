@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { getApiKey, setApiKey } from "./auth";
 import { runAgentLoop } from "./agent/agentLoop";
+import type { ApprovalRequest } from "./agent/types";
 import { buildSystemPrompt, gatherContext } from "./context";
 import type { ChatMessage } from "./shogoClient";
 
@@ -10,6 +11,7 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
   private history: ChatMessage[] = [];
   private abortController?: AbortController;
+  private pendingApprovals = new Map<string, (approved: boolean) => void>();
 
   constructor(private readonly context: vscode.ExtensionContext) {}
 
@@ -38,12 +40,18 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
           break;
         case "stop":
           this.abortController?.abort();
+          this.rejectAllApprovals();
+          break;
+        case "approvalResponse":
+          this.handleApprovalResponse(msg.id, !!msg.approved);
           break;
       }
     });
   }
 
   public newChat(): void {
+    this.abortController?.abort();
+    this.rejectAllApprovals();
     this.history = [];
     this.post({ type: "clear" });
   }
@@ -106,6 +114,7 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
         onFinalToken: (chunk) => {
           this.post({ type: "assistantToken", text: chunk });
         },
+        requestApproval: (request) => this.requestApproval(request),
       });
       this.history.push({ role: "assistant", content: assistantText });
     } catch (err: unknown) {
@@ -115,6 +124,36 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
       this.post({ type: "assistantEnd" });
       this.abortController = undefined;
     }
+  }
+
+  private requestApproval(request: ApprovalRequest): Promise<boolean> {
+    if (!this.view) {
+      return Promise.resolve(false);
+    }
+
+    this.post({ type: "approvalRequest", request });
+    return new Promise((resolve) => {
+      this.pendingApprovals.set(request.id, resolve);
+    });
+  }
+
+  private handleApprovalResponse(id: unknown, approved: boolean): void {
+    if (typeof id !== "string") {
+      return;
+    }
+    const resolve = this.pendingApprovals.get(id);
+    if (!resolve) {
+      return;
+    }
+    this.pendingApprovals.delete(id);
+    resolve(approved);
+  }
+
+  private rejectAllApprovals(): void {
+    for (const resolve of this.pendingApprovals.values()) {
+      resolve(false);
+    }
+    this.pendingApprovals.clear();
   }
 
   private describeError(err: unknown): string {

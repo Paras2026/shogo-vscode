@@ -35,21 +35,30 @@ export const runCommandTool: ToolDefinition = {
       return { ok: false, error: `Blocked command: ${decision.reason}` };
     }
 
-    if (decision.action === "confirm") {
-      const choice = await vscode.window.showWarningMessage(
-        `Shogo wants to run this command:\n\n${command}\n\nReason: ${decision.reason}`,
-        { modal: true },
-        "Run",
-        "Cancel"
-      );
-      if (choice !== "Run") {
-        return { ok: false, error: "User cancelled command." };
-      }
-    }
-
     const root = getWorkspaceRoot();
     if (!root) {
       return { ok: false, error: "No workspace folder is open." };
+    }
+
+    if (!ctx.requestApproval) {
+      return { ok: false, error: "Approval UI is unavailable, so the command was not run." };
+    }
+
+    const approved = await ctx.requestApproval({
+      id: createApprovalId("command"),
+      kind: "command",
+      title: decision.action === "allow" ? "Run safe command?" : "Run command?",
+      description: command,
+      primaryAction: "Run Command",
+      secondaryAction: "Cancel",
+      details: {
+        cwd: root.uri.fsPath,
+        reason: decision.reason,
+        policy: decision.action,
+      },
+    });
+    if (!approved) {
+      return { ok: false, error: "User cancelled command." };
     }
 
     const timeoutMs = typeof input.timeoutMs === "number" ? Math.min(Math.max(input.timeoutMs, 1000), 300000) : DEFAULT_TIMEOUT_MS;
@@ -131,4 +140,8 @@ async function runCommand(
       finish(code === 0 ? { ok: true, data } : { ok: false, error: `Command exited with code ${code}.`, data });
     });
   });
+}
+
+function createApprovalId(prefix: string): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }

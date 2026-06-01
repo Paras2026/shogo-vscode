@@ -2,9 +2,12 @@
   "name": "shogo-vscode",
   "displayName": "Shogo Chat",
   "description": "Chat with a Shogo Cloud agent right inside VS Code, with your workspace as context.",
-  "version": "0.0.1",
+  "version": "0.0.6",
   "publisher": "your-team",
   "private": true,
+  "extensionKind": [
+    "ui"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -18,7 +21,12 @@
     "Chat",
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onView:shogo.chatView",
+    "onCommand:shogo.newChat",
+    "onCommand:shogo.setApiKey",
+    "onCommand:shogo.clearApiKey"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
     "viewsContainers": {
@@ -40,21 +48,47 @@
       ]
     },
     "commands": [
-      { "command": "shogo.setApiKey", "title": "Shogo: Set API Key" },
-      { "command": "shogo.clearApiKey", "title": "Shogo: Clear API Key" },
-      { "command": "shogo.newChat", "title": "Shogo: New Chat", "icon": "$(add)" }
+      {
+        "command": "shogo.setApiKey",
+        "title": "Shogo: Set API Key"
+      },
+      {
+        "command": "shogo.clearApiKey",
+        "title": "Shogo: Clear API Key"
+      },
+      {
+        "command": "shogo.newChat",
+        "title": "Shogo: New Chat",
+        "icon": "$(add)"
+      }
     ],
     "menus": {
       "view/title": [
-        { "command": "shogo.newChat", "when": "view == shogo.chatView", "group": "navigation" }
+        {
+          "command": "shogo.newChat",
+          "when": "view == shogo.chatView",
+          "group": "navigation"
+        }
       ]
     },
     "configuration": {
       "title": "Shogo",
       "properties": {
-        "shogo.model": { "type": "string", "default": "claude-sonnet-4-5", "description": "The Shogo Cloud model ID to use for chat." },
-        "shogo.includeActiveFile": { "type": "boolean", "default": true, "description": "Include the active file and selection as context in each message." },
-        "shogo.apiUrl": { "type": "string", "default": "", "description": "Override the Shogo Cloud API base URL (leave blank to use the SDK default)." }
+        "shogo.model": {
+          "type": "string",
+          "default": "claude-sonnet-4-5",
+          "description": "The Shogo Cloud model ID to use for chat."
+        },
+        "shogo.includeActiveFile": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include the active file and selection as context in each message."
+        },
+        "shogo.apiUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Override the Shogo Cloud API base URL (leave blank to use the SDK default)."
+        }
       }
     }
   },

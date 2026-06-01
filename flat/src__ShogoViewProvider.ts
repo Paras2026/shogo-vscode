@@ -1,7 +1,9 @@
 import * as vscode from "vscode";
 import { getApiKey, setApiKey } from "./auth";
+import { runAgentLoop } from "./agent/agentLoop";
+import type { ApprovalRequest } from "./agent/types";
 import { buildSystemPrompt, gatherContext } from "./context";
-import { streamChat, type ChatMessage } from "./shogoClient";
+import type { ChatMessage } from "./shogoClient";
 
 export class ShogoViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "shogo.chatView";
@@ -9,6 +11,7 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
   private history: ChatMessage[] = [];
   private abortController?: AbortController;
+  private pendingApprovals = new Map<string, (approved: boolean) => void>();
 
   constructor(private readonly context: vscode.ExtensionContext) {}
 
@@ -37,12 +40,18 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
           break;
         case "stop":
           this.abortController?.abort();
+          this.rejectAllApprovals();
+          break;
+        case "approvalResponse":
+          this.handleApprovalResponse(msg.id, !!msg.approved);
           break;
       }
     });
   }
 
   public newChat(): void {
+    this.abortController?.abort();
+    this.rejectAllApprovals();
     this.history = [];
     this.post({ type: "clear" });
   }
@@ -91,16 +100,21 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
     let assistantText = "";
 
     try {
-      assistantText = await streamChat({
+      assistantText = await runAgentLoop({
         apiKey,
         model,
         apiUrl: apiUrl || undefined,
         system,
         messages: this.history,
+        extensionContext: this.context,
         signal: this.abortController.signal,
-        onToken: (chunk) => {
+        onActivity: (text) => {
+          this.post({ type: "toolActivity", text });
+        },
+        onFinalToken: (chunk) => {
           this.post({ type: "assistantToken", text: chunk });
         },
+        requestApproval: (request) => this.requestApproval(request),
       });
       this.history.push({ role: "assistant", content: assistantText });
     } catch (err: unknown) {
@@ -110,6 +124,36 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
       this.post({ type: "assistantEnd" });
       this.abortController = undefined;
     }
+  }
+
+  private requestApproval(request: ApprovalRequest): Promise<boolean> {
+    if (!this.view) {
+      return Promise.resolve(false);
+    }
+
+    this.post({ type: "approvalRequest", request });
+    return new Promise((resolve) => {
+      this.pendingApprovals.set(request.id, resolve);
+    });
+  }
+
+  private handleApprovalResponse(id: unknown, approved: boolean): void {
+    if (typeof id !== "string") {
+      return;
+    }
+    const resolve = this.pendingApprovals.get(id);
+    if (!resolve) {
+      return;
+    }
+    this.pendingApprovals.delete(id);
+    resolve(approved);
+  }
+
+  private rejectAllApprovals(): void {
+    for (const resolve of this.pendingApprovals.values()) {
+      resolve(false);
+    }
+    this.pendingApprovals.clear();
   }
 
   private describeError(err: unknown): string {
@@ -142,23 +186,40 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
     );
     const nonce = getNonce();
 
-    return `<!DOCTYPE html>
+    return /* html */ `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; font-src ${webview.cspSource}; img-src ${webview.cspSource} https: data:; script-src 'nonce-${nonce}';" />
   <link href="${styleUri}" rel="stylesheet" />
+  <style nonce="${nonce}">
+    html, body { height: 100%; margin: 0; }
+    body { display: flex; flex-direction: column; min-height: 100vh;
+      color: var(--vscode-foreground); background: var(--vscode-editor-background);
+      font-family: var(--vscode-font-family); }
+    #messages { flex: 1 1 auto; overflow-y: auto; padding: 12px; }
+    #composer { flex: 0 0 auto; border-top: 1px solid var(--vscode-panel-border, #555);
+      padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+    #input { width: 100%; min-height: 40px; box-sizing: border-box;
+      color: var(--vscode-input-foreground); background: var(--vscode-input-background);
+      border: 1px solid var(--vscode-input-border, #888); border-radius: 4px; padding: 6px; }
+    .composer-actions { display: flex; justify-content: flex-end; gap: 6px; }
+    button { padding: 4px 12px; border: none; border-radius: 4px; cursor: pointer;
+      color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
+    #auth-banner { margin: 12px; padding: 12px; border: 1px solid var(--vscode-focusBorder, #888); border-radius: 6px; }
+    .hidden { display: none !important; }
+  </style>
   <title>Shogo Chat</title>
 </head>
 <body>
-  <div id="auth-banner" class="hidden">
+  <div id="auth-banner">
     <p>Set your Shogo Cloud API key to start chatting.</p>
     <button id="set-key-btn">Set API Key</button>
   </div>
   <div id="messages"></div>
   <div id="composer">
-    <textarea id="input" rows="2" placeholder="Ask Shogo..."></textarea>
+    <textarea id="input" rows="2" placeholder="Ask Shogo... (Enter to send, Shift+Enter for newline)"></textarea>
     <div class="composer-actions">
       <button id="send-btn" title="Send">Send</button>
       <button id="stop-btn" class="hidden" title="Stop">Stop</button>

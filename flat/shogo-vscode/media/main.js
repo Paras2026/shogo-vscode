@@ -29,7 +29,7 @@
 
     const roleEl = document.createElement("div");
     roleEl.className = "role";
-    roleEl.textContent = role === "user" ? "You" : role === "error" ? "Error" : role === "tool" ? "Tool" : "Shogo";
+    roleEl.textContent = role === "user" ? "You" : role === "error" ? "Error" : role === "tool" ? "Tool" : role === "approval" ? "Approval" : "Shogo";
 
     const bubble = document.createElement("div");
     bubble.className = "bubble";
@@ -44,6 +44,92 @@
     messagesEl.appendChild(wrap);
     scrollToBottom();
     return bubble;
+  }
+
+  function addApprovalCard(request) {
+    const bubble = addMessage("approval", "");
+    bubble.textContent = "";
+
+    const card = document.createElement("div");
+    card.className = "approval-card " + (request.kind || "approval");
+
+    const header = document.createElement("div");
+    header.className = "approval-header";
+
+    const icon = document.createElement("div");
+    icon.className = "approval-icon";
+    icon.textContent = request.kind === "command" ? "▸" : "✎";
+
+    const heading = document.createElement("div");
+    heading.className = "approval-heading";
+
+    const title = document.createElement("div");
+    title.className = "approval-title";
+    title.textContent = request.title || "Approval required";
+
+    const description = document.createElement("div");
+    description.className = "approval-description";
+    description.textContent = request.description || "";
+
+    heading.appendChild(title);
+    heading.appendChild(description);
+    header.appendChild(icon);
+    header.appendChild(heading);
+    card.appendChild(header);
+
+    if (request.details && typeof request.details === "object") {
+      const details = document.createElement("div");
+      details.className = "approval-details";
+      Object.keys(request.details).forEach((key) => {
+        const value = request.details[key];
+        if (value === undefined || value === null || value === "") {
+          return;
+        }
+        const row = document.createElement("div");
+        row.className = "approval-detail-row";
+        const label = document.createElement("span");
+        label.className = "approval-detail-label";
+        label.textContent = key;
+        const detailValue = document.createElement("span");
+        detailValue.className = "approval-detail-value";
+        detailValue.textContent = String(value);
+        row.appendChild(label);
+        row.appendChild(detailValue);
+        details.appendChild(row);
+      });
+      card.appendChild(details);
+    }
+
+    const actions = document.createElement("div");
+    actions.className = "approval-actions";
+
+    const primary = document.createElement("button");
+    primary.className = "approval-primary";
+    primary.textContent = request.primaryAction || "Approve";
+
+    const secondary = document.createElement("button");
+    secondary.className = "approval-secondary";
+    secondary.textContent = request.secondaryAction || "Cancel";
+
+    function respond(approved) {
+      primary.disabled = true;
+      secondary.disabled = true;
+      card.classList.add(approved ? "approved" : "rejected");
+      const status = document.createElement("div");
+      status.className = "approval-status";
+      status.textContent = approved ? "Approved" : "Rejected";
+      card.appendChild(status);
+      vscode.postMessage({ type: "approvalResponse", id: request.id, approved: approved });
+    }
+
+    primary.addEventListener("click", () => respond(true));
+    secondary.addEventListener("click", () => respond(false));
+
+    actions.appendChild(primary);
+    actions.appendChild(secondary);
+    card.appendChild(actions);
+    bubble.appendChild(card);
+    scrollToBottom();
   }
 
   function send() {
@@ -97,6 +183,9 @@
         break;
       case "toolActivity":
         addMessage("tool", msg.text);
+        break;
+      case "approvalRequest":
+        addApprovalCard(msg.request || {});
         break;
       case "error":
         if (currentAssistantEl) {

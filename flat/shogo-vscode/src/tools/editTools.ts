@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import type { ToolDefinition, ToolResult } from "../agent/types";
+import type { ToolDefinition, ToolExecutionContext, ToolResult } from "../agent/types";
 import { normalizeRelativePath, resolveWorkspacePath, truncateText } from "./workspace";
 
 export const applyPatchTool: ToolDefinition = {
@@ -33,7 +33,7 @@ export const applyPatchTool: ToolDefinition = {
 
     const next = `${current.slice(0, index)}${input.newText}${current.slice(index + input.oldText.length)}`;
     ctx.postActivity?.(`Previewing edit: ${rel}`);
-    const approved = await previewAndApprove(ctx.extensionContext, uri, rel, next, "Apply Shogo edit");
+    const approved = await previewAndApprove(ctx, uri, rel, next, "Apply Shogo edit", "Replace exact text block");
     if (!approved) {
       return { ok: false, error: "User rejected edit." };
     }
@@ -77,7 +77,14 @@ export const writeFileTool: ToolDefinition = {
     }
 
     ctx.postActivity?.(`${exists ? "Previewing file replacement" : "Previewing new file"}: ${rel}`);
-    const approved = await previewAndApprove(ctx.extensionContext, uri, rel, input.content, exists ? "Apply Shogo file update" : "Create Shogo file");
+    const approved = await previewAndApprove(
+      ctx,
+      uri,
+      rel,
+      input.content,
+      exists ? "Apply Shogo file update" : "Create Shogo file",
+      exists ? "Replace full file content" : "Create new file"
+    );
     if (!approved) {
       return { ok: false, error: "User rejected file write." };
     }
@@ -101,25 +108,40 @@ export const writeFileTool: ToolDefinition = {
 };
 
 async function previewAndApprove(
-  context: vscode.ExtensionContext,
+  ctx: ToolExecutionContext,
   originalUri: vscode.Uri,
   relativePath: string,
   nextContent: string,
-  actionLabel: string
+  actionLabel: string,
+  changeType: string
 ): Promise<boolean> {
-  await vscode.workspace.fs.createDirectory(context.globalStorageUri);
+  if (!ctx.requestApproval) {
+    return false;
+  }
+
+  await vscode.workspace.fs.createDirectory(ctx.extensionContext.globalStorageUri);
   const safeName = relativePath.replace(/[\\/:*?"<>|]/g, "_");
-  const previewUri = vscode.Uri.joinPath(context.globalStorageUri, `preview-${Date.now()}-${safeName}`);
+  const previewUri = vscode.Uri.joinPath(ctx.extensionContext.globalStorageUri, `preview-${Date.now()}-${safeName}`);
   await vscode.workspace.fs.writeFile(previewUri, Buffer.from(nextContent, "utf8"));
   await vscode.commands.executeCommand("vscode.diff", originalUri, previewUri, `Shogo edit preview: ${relativePath}`);
 
-  const choice = await vscode.window.showInformationMessage(
-    `Review the diff for ${relativePath}. Apply this change?`,
-    { modal: true },
-    actionLabel,
-    "Cancel"
-  );
-  return choice === actionLabel;
+  return ctx.requestApproval({
+    id: createApprovalId("edit"),
+    kind: "edit",
+    title: "Apply edit?",
+    description: `Review the opened diff for ${relativePath}.`,
+    primaryAction: actionLabel,
+    secondaryAction: "Reject",
+    details: {
+      file: relativePath,
+      change: changeType,
+      diff: "Opened in editor",
+    },
+  });
+}
+
+function createApprovalId(prefix: string): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 export function summarizeToolData(data: unknown): string {

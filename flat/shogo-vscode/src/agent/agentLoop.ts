@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { streamChat, type ChatMessage } from "../shogoClient";
 import { executeTool, getToolDescriptions, getToolNames } from "./toolRegistry";
-import type { ParsedToolCall, ToolResult } from "./types";
+import type { ApprovalRequest, ParsedToolCall, ToolResult } from "./types";
 
 export interface AgentLoopOptions {
   apiKey: string;
@@ -13,6 +13,7 @@ export interface AgentLoopOptions {
   signal?: AbortSignal;
   onActivity?: (text: string) => void;
   onFinalToken?: (text: string) => void;
+  requestApproval?: (request: ApprovalRequest) => Promise<boolean>;
 }
 
 const MAX_STEPS = 12;
@@ -48,6 +49,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<string> {
       extensionContext: opts.extensionContext,
       signal: opts.signal,
       postActivity: opts.onActivity,
+      requestApproval: opts.requestApproval,
     });
 
     opts.onActivity?.(`${toolCall.tool}: ${result.ok ? "done" : "failed"}`);
