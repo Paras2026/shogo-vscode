@@ -70,10 +70,31 @@ export async function streamChat(opts: StreamOptions): Promise<StreamResult> {
   const model = validateModel(opts.model);
   logInfo(`streamChat: model=${model}, messages=${opts.messages.length}, system=${opts.system.length} chars`);
 
+  const debugFetch: typeof fetch = async (input, init) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if (url.includes("/chat/completions") || url.includes("/ai/v1")) {
+      logDebug(`HTTP ${init?.method ?? "GET"} ${url}`);
+      if (init?.body) {
+        try {
+          const bodyObj = JSON.parse(String(init.body));
+          logDebug(`  → model: "${bodyObj.model}", messages: ${bodyObj.messages?.length ?? "?"}, tools: ${bodyObj.tools?.length ?? 0}`);
+        } catch { /* not JSON */ }
+      }
+      const response = await fetch(input, init);
+      const cloned = response.clone();
+      cloned.text().then((t) => {
+        const preview = t.length > 500 ? t.slice(0, 500) + "..." : t;
+        logDebug(`  ← HTTP ${response.status} (${t.length} bytes): ${preview}`);
+      }).catch(() => {});
+      return response;
+    }
+    return fetch(input, init);
+  };
+
   const provider = createShogoLlmProvider(
     opts.apiUrl
-      ? { apiKey: opts.apiKey, baseUrl: opts.apiUrl }
-      : { apiKey: opts.apiKey }
+      ? { apiKey: opts.apiKey, baseUrl: opts.apiUrl, fetch: debugFetch }
+      : { apiKey: opts.apiKey, fetch: debugFetch }
   );
 
   const coreMessages: ModelMessage[] = opts.messages.map((m) => ({
