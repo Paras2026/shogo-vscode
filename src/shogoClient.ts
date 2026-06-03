@@ -51,16 +51,22 @@ export async function streamChat(opts: StreamOptions): Promise<StreamResult> {
 
   try {
     logDebug("Attempting native tool_use stream...");
-    return await streamWithNativeTools(provider, opts.model, coreMessages, opts);
+    const result = await streamWithNativeTools(provider, opts.model, coreMessages, opts);
+    if (result.text.length === 0 && result.toolCalls.length === 0) {
+      logWarn("Native tool_use returned empty — falling back to text-based");
+      return streamWithTextFallback(provider, opts.model, coreMessages, opts);
+    }
+    return result;
   } catch (nativeError: unknown) {
     const msg = nativeError instanceof Error ? nativeError.message : String(nativeError);
     logWarn(`Native tool_use failed: ${msg}`);
-    if (isToolNotSupportedError(msg)) {
-      logInfo("Falling back to text-based tool parsing");
-      return streamWithTextFallback(provider, opts.model, coreMessages, opts);
+    logInfo("Falling back to text-based tool parsing (safe fallback)");
+    try {
+      return await streamWithTextFallback(provider, opts.model, coreMessages, opts);
+    } catch (fallbackError: unknown) {
+      logError("Text fallback also failed", fallbackError);
+      throw nativeError;
     }
-    logError("Native tool_use error (not a tool-support issue)", nativeError);
-    throw nativeError;
   }
 }
 
@@ -125,14 +131,6 @@ async function streamWithTextFallback(
   }
 
   return { text: full, toolCalls };
-}
-
-function isToolNotSupportedError(msg: string): boolean {
-  const lower = msg.toLowerCase();
-  return (
-    lower.includes("unknown parameter") &&
-    (lower.includes("tools") || lower.includes("tool_choice"))
-  );
 }
 
 /**
