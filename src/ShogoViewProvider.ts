@@ -31,13 +31,13 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
 
     webviewView.webview.html = this.getHtml(webviewView.webview);
 
-    webviewView.webview.onDidReceiveMessage(async (msg) => {
+      webviewView.webview.onDidReceiveMessage(async (msg) => {
       switch (msg.type) {
         case "ready":
           await this.refreshAuthState();
           break;
         case "prompt":
-          await this.handlePrompt(msg.text);
+          await this.handlePrompt(msg.text, msg.model);
           break;
         case "setKey":
           await this.handleSetKey();
@@ -48,6 +48,12 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
           break;
         case "approvalResponse":
           this.handleApprovalResponse(msg.id, !!msg.approved);
+          break;
+        case "newChat":
+          this.newChat();
+          break;
+        case "openFile":
+          await this.handleOpenFile(msg.path);
           break;
       }
     });
@@ -72,7 +78,7 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async handlePrompt(text: string): Promise<void> {
+  private async handlePrompt(text: string, modelOverride?: string): Promise<void> {
     const trimmed = (text ?? "").trim();
     if (!trimmed) {
       return;
@@ -92,7 +98,7 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
     }
 
     const config = vscode.workspace.getConfiguration("shogo");
-    const model = config.get<string>("model", "claude-sonnet-4-5");
+    const model = modelOverride || config.get<string>("model", "claude-sonnet-4-5");
     const includeFile = config.get<boolean>("includeActiveFile", true);
     const apiUrl = config.get<string>("apiUrl", "");
 
@@ -158,6 +164,20 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
     resolve(approved);
   }
 
+  private async handleOpenFile(filePath: string): Promise<void> {
+    try {
+      const root = vscode.workspace.workspaceFolders?.[0];
+      if (!root) return;
+      const fileUri = vscode.Uri.joinPath(root.uri, filePath);
+      const doc = await vscode.workspace.openTextDocument(fileUri);
+      await vscode.window.showTextDocument(doc, { preview: true });
+      logInfo(`Opened file: ${filePath}`);
+    } catch (err) {
+      logError(`Failed to open file: ${filePath}`, err);
+      vscode.window.showWarningMessage(`Could not open ${filePath}`);
+    }
+  }
+
   private rejectAllApprovals(): void {
     for (const resolve of this.pendingApprovals.values()) {
       resolve(false);
@@ -203,31 +223,35 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; font-src ${webview.cspSource}; img-src ${webview.cspSource} https: data:; script-src 'nonce-${nonce}';" />
   <link href="${styleUri}" rel="stylesheet" />
   <style nonce="${nonce}">
-    html, body { height: 100%; margin: 0; }
-    body { display: flex; flex-direction: column; min-height: 100vh;
-      color: var(--vscode-foreground); background: var(--vscode-editor-background);
-      font-family: var(--vscode-font-family); }
-    #messages { flex: 1 1 auto; overflow-y: auto; padding: 12px; }
-    #composer { flex: 0 0 auto; border-top: 1px solid var(--vscode-panel-border, #555);
-      padding: 8px; display: flex; flex-direction: column; gap: 6px; }
-    #input { width: 100%; min-height: 40px; box-sizing: border-box;
-      color: var(--vscode-input-foreground); background: var(--vscode-input-background);
-      border: 1px solid var(--vscode-input-border, #888); border-radius: 4px; padding: 6px; }
-    .composer-actions { display: flex; justify-content: flex-end; gap: 6px; }
-    button { padding: 4px 12px; border: none; border-radius: 4px; cursor: pointer;
-      color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
-    #auth-banner { margin: 12px; padding: 12px; border: 1px solid var(--vscode-focusBorder, #888); border-radius: 6px; }
-    .hidden { display: none !important; }
+    html, body { height: 100%; margin: 0; overflow: hidden; }
   </style>
   <title>Shogo Chat</title>
 </head>
 <body>
+  <div id="header">
+    <div id="header-left">
+      <span id="header-logo">⚡ Shogo</span>
+    </div>
+    <div style="display:flex;gap:4px;align-items:center;">
+      <button id="history-btn" title="Chat History">☰</button>
+      <button id="new-chat-btn" title="New Chat">+</button>
+    </div>
+  </div>
+  <div id="history-drawer"></div>
   <div id="auth-banner">
     <p>Set your Shogo Cloud API key to start chatting.</p>
     <button id="set-key-btn">Set API Key</button>
   </div>
   <div id="messages"></div>
   <div id="composer">
+    <div class="composer-top">
+      <select id="model-select">
+        <option value="claude-sonnet-4-5">Claude Sonnet 4.5</option>
+        <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
+        <option value="hoshi-1.0">Hoshi 1.0</option>
+        <option value="gpt-4o">GPT-4o</option>
+      </select>
+    </div>
     <textarea id="input" rows="2" placeholder="Ask Shogo... (Enter to send, Shift+Enter for newline)"></textarea>
     <div class="composer-actions">
       <button id="send-btn" title="Send">Send</button>

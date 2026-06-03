@@ -7,10 +7,16 @@
   const stopBtn = document.getElementById("stop-btn");
   const authBanner = document.getElementById("auth-banner");
   const setKeyBtn = document.getElementById("set-key-btn");
+  const modelSelect = document.getElementById("model-select");
+  const historyBtn = document.getElementById("history-btn");
+  const historyDrawer = document.getElementById("history-drawer");
+  const newChatBtn = document.getElementById("new-chat-btn");
 
   let currentAssistantRaw = "";
   let currentAssistantEl = null;
   let streaming = false;
+  let chatTitle = "New Chat";
+  let sessionHistory = [];
 
   function setStreaming(on) {
     streaming = on;
@@ -23,15 +29,72 @@
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 
+  function escapeHtml(s) {
+    return s
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+  }
+
+  function linkifyFilePaths(text) {
+    return text.replace(
+      /(?<!["`])(src\/[\w\-/.]+\.\w{1,5}|lib\/[\w\-/.]+\.\w{1,5}|\.\/[\w\-/.]+\.\w{1,5})/g,
+      '<a href="#" class="file-link" data-path="$1">$1</a>'
+    );
+  }
+
+  function renderMarkdown(src) {
+    var codeBlocks = [];
+    var text = src.replace(/```(\w*)\n?([\s\S]*?)```/g, function (_m, lang, code) {
+      var idx = codeBlocks.length;
+      var langLabel = lang || "";
+      var escapedCode = escapeHtml(code.replace(/\n$/, ""));
+      codeBlocks.push(
+        '<div class="code-block-wrapper">' +
+          '<div class="code-block-header"><span>' + escapeHtml(langLabel) + '</span><button class="copy-btn" onclick="window._copyCode(' + idx + ')">Copy</button></div>' +
+          '<pre><code class="language-' + escapeHtml(langLabel) + '">' + escapedCode + "</code></pre></div>"
+      );
+      return "\u0000CODE" + idx + "\u0000";
+    });
+
+    text = escapeHtml(text);
+    text = text.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+    text = text.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    text = text.replace(
+      /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
+      '<a href="$2">$1</a>'
+    );
+    text = linkifyFilePaths(text);
+    text = text.replace(/\n/g, "<br/>");
+    text = text.replace(/\u0000CODE(\d+)\u0000/g, function (_m, i) {
+      return codeBlocks[Number(i)];
+    });
+    return text;
+  }
+
+  window._copyCode = function (idx) {
+    var codeEl = document.querySelectorAll("pre code")[idx];
+    if (codeEl) {
+      navigator.clipboard.writeText(codeEl.textContent || "").then(function () {
+        var btn = document.querySelectorAll(".copy-btn")[idx];
+        if (btn) {
+          btn.textContent = "Copied!";
+          setTimeout(function () { btn.textContent = "Copy"; }, 1500);
+        }
+      });
+    }
+  };
+
   function addMessage(role, text) {
-    const wrap = document.createElement("div");
+    var wrap = document.createElement("div");
     wrap.className = "msg " + role;
 
-    const roleEl = document.createElement("div");
+    var roleEl = document.createElement("div");
     roleEl.className = "role";
-    roleEl.textContent = role === "user" ? "You" : role === "error" ? "Error" : role === "tool" ? "Tool" : role === "approval" ? "Approval" : "Shogo";
+    var labels = { user: "You", assistant: "Shogo", error: "Error", tool: "", approval: "" };
+    roleEl.textContent = labels[role] || role;
 
-    const bubble = document.createElement("div");
+    var bubble = document.createElement("div");
     bubble.className = "bubble";
     if (role === "assistant") {
       bubble.innerHTML = "";
@@ -47,27 +110,25 @@
   }
 
   function addApprovalCard(request) {
-    const bubble = addMessage("approval", "");
-    bubble.textContent = "";
+    var bubble = addMessage("approval", "");
 
-    const card = document.createElement("div");
-    card.className = "approval-card " + (request.kind || "approval");
+    var card = document.createElement("div");
+    card.className = "approval-card " + (request.kind || "edit");
 
-    const header = document.createElement("div");
+    var header = document.createElement("div");
     header.className = "approval-header";
 
-    const icon = document.createElement("div");
+    var icon = document.createElement("div");
     icon.className = "approval-icon";
     icon.textContent = request.kind === "command" ? "▸" : "✎";
 
-    const heading = document.createElement("div");
-    heading.className = "approval-heading";
+    var heading = document.createElement("div");
 
-    const title = document.createElement("div");
+    var title = document.createElement("div");
     title.className = "approval-title";
     title.textContent = request.title || "Approval required";
 
-    const description = document.createElement("div");
+    var description = document.createElement("div");
     description.className = "approval-description";
     description.textContent = request.description || "";
 
@@ -78,19 +139,17 @@
     card.appendChild(header);
 
     if (request.details && typeof request.details === "object") {
-      const details = document.createElement("div");
+      var details = document.createElement("div");
       details.className = "approval-details";
-      Object.keys(request.details).forEach((key) => {
-        const value = request.details[key];
-        if (value === undefined || value === null || value === "") {
-          return;
-        }
-        const row = document.createElement("div");
+      Object.keys(request.details).forEach(function (key) {
+        var value = request.details[key];
+        if (value === undefined || value === null || value === "") return;
+        var row = document.createElement("div");
         row.className = "approval-detail-row";
-        const label = document.createElement("span");
+        var label = document.createElement("span");
         label.className = "approval-detail-label";
         label.textContent = key;
-        const detailValue = document.createElement("span");
+        var detailValue = document.createElement("span");
         detailValue.className = "approval-detail-value";
         detailValue.textContent = String(value);
         row.appendChild(label);
@@ -100,14 +159,14 @@
       card.appendChild(details);
     }
 
-    const actions = document.createElement("div");
+    var actions = document.createElement("div");
     actions.className = "approval-actions";
 
-    const primary = document.createElement("button");
+    var primary = document.createElement("button");
     primary.className = "approval-primary";
     primary.textContent = request.primaryAction || "Approve";
 
-    const secondary = document.createElement("button");
+    var secondary = document.createElement("button");
     secondary.className = "approval-secondary";
     secondary.textContent = request.secondaryAction || "Cancel";
 
@@ -115,15 +174,15 @@
       primary.disabled = true;
       secondary.disabled = true;
       card.classList.add(approved ? "approved" : "rejected");
-      const status = document.createElement("div");
+      var status = document.createElement("div");
       status.className = "approval-status";
-      status.textContent = approved ? "Approved" : "Rejected";
+      status.textContent = approved ? "✓ Approved" : "✗ Rejected";
       card.appendChild(status);
       vscode.postMessage({ type: "approvalResponse", id: request.id, approved: approved });
     }
 
-    primary.addEventListener("click", () => respond(true));
-    secondary.addEventListener("click", () => respond(false));
+    primary.addEventListener("click", function () { respond(true); });
+    secondary.addEventListener("click", function () { respond(false); });
 
     actions.appendChild(primary);
     actions.appendChild(secondary);
@@ -133,33 +192,58 @@
   }
 
   function send() {
-    const text = inputEl.value.trim();
-    if (!text || streaming) {
-      return;
-    }
+    var text = inputEl.value.trim();
+    if (!text || streaming) return;
     inputEl.value = "";
-    vscode.postMessage({ type: "prompt", text: text });
+    var model = modelSelect.value;
+    vscode.postMessage({ type: "prompt", text: text, model: model });
+  }
+
+  function toggleHistory() {
+    historyDrawer.classList.toggle("open");
   }
 
   sendBtn.addEventListener("click", send);
-  stopBtn.addEventListener("click", () => vscode.postMessage({ type: "stop" }));
-  setKeyBtn.addEventListener("click", () => vscode.postMessage({ type: "setKey" }));
+  stopBtn.addEventListener("click", function () { vscode.postMessage({ type: "stop" }); });
+  setKeyBtn.addEventListener("click", function () { vscode.postMessage({ type: "setKey" }); });
+  historyBtn.addEventListener("click", toggleHistory);
+  newChatBtn.addEventListener("click", function () {
+    if (historyDrawer.classList.contains("open")) {
+      historyDrawer.classList.remove("open");
+    }
+    vscode.postMessage({ type: "newChat" });
+    chatTitle = "New Chat";
+  });
 
-  inputEl.addEventListener("keydown", (e) => {
+  inputEl.addEventListener("keydown", function (e) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       send();
     }
   });
 
-  window.addEventListener("message", (event) => {
-    const msg = event.data;
+  messagesEl.addEventListener("click", function (e) {
+    var target = e.target;
+    if (target.classList && target.classList.contains("file-link")) {
+      var path = target.getAttribute("data-path");
+      if (path) {
+        vscode.postMessage({ type: "openFile", path: path });
+      }
+    }
+  });
+
+  window.addEventListener("message", function (event) {
+    var msg = event.data;
     switch (msg.type) {
       case "authState":
         authBanner.classList.toggle("hidden", msg.hasKey);
         break;
       case "userMessage":
         addMessage("user", msg.text);
+        if (chatTitle === "New Chat") {
+          chatTitle = msg.text.slice(0, 40) + (msg.text.length > 40 ? "..." : "");
+          document.getElementById("header-logo").textContent = "⚡ " + chatTitle;
+        }
         break;
       case "assistantStart":
         setStreaming(true);
@@ -178,8 +262,8 @@
       case "assistantEnd":
         if (currentAssistantEl) {
           currentAssistantEl.classList.remove("cursor");
+          currentAssistantEl = null;
         }
-        currentAssistantEl = null;
         setStreaming(false);
         break;
       case "toolActivity":
@@ -201,44 +285,41 @@
         currentAssistantRaw = "";
         currentAssistantEl = null;
         setStreaming(false);
+        chatTitle = "New Chat";
+        document.getElementById("header-logo").textContent = "⚡ Shogo";
+        break;
+      case "sessionList":
+        renderSessionList(msg.sessions || []);
         break;
     }
   });
 
-  function escapeHtml(s) {
-    return s
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;");
-  }
-
-  // Minimal, safe Markdown renderer: fenced code, inline code, bold, links, line breaks.
-  function renderMarkdown(src) {
-    const codeBlocks = [];
-    let text = src.replace(/```(\w*)\n?([\s\S]*?)```/g, (_m, lang, code) => {
-      const idx = codeBlocks.length;
-      codeBlocks.push(
-        '<pre><code class="language-' +
-          escapeHtml(lang) +
-          '">' +
-          escapeHtml(code.replace(/\n$/, "")) +
-          "</code></pre>"
-      );
-      return "\u0000CODE" + idx + "\u0000";
+  function renderSessionList(sessions) {
+    historyDrawer.innerHTML = "";
+    if (sessions.length === 0) {
+      var empty = document.createElement("div");
+      empty.style.cssText = "font-size:11px;opacity:0.4;padding:8px;text-align:center;";
+      empty.textContent = "No previous sessions";
+      historyDrawer.appendChild(empty);
+      return;
+    }
+    sessions.forEach(function (session) {
+      var item = document.createElement("div");
+      item.className = "history-item";
+      var titleSpan = document.createElement("span");
+      titleSpan.className = "history-item-title";
+      titleSpan.textContent = session.title || "Untitled";
+      var meta = document.createElement("span");
+      meta.className = "history-item-meta";
+      meta.textContent = (session.messageCount || 0) + " msgs";
+      item.appendChild(titleSpan);
+      item.appendChild(meta);
+      item.addEventListener("click", function () {
+        vscode.postMessage({ type: "loadSession", sessionId: session.id });
+        historyDrawer.classList.remove("open");
+      });
+      historyDrawer.appendChild(item);
     });
-
-    text = escapeHtml(text);
-
-    text = text.replace(/`([^`\n]+)`/g, (_m, c) => "<code>" + c + "</code>");
-    text = text.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-    text = text.replace(
-      /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
-      '<a href="$2">$1</a>'
-    );
-    text = text.replace(/\n/g, "<br/>");
-
-    text = text.replace(/\u0000CODE(\d+)\u0000/g, (_m, i) => codeBlocks[Number(i)]);
-    return text;
   }
 
   vscode.postMessage({ type: "ready" });
