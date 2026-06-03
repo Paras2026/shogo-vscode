@@ -170,4 +170,42 @@ export const TOOL_DEFINITIONS: Record<string, { description: string; parameters:
       required: ["path"],
     },
   },
+  gitStatus: {
+    description:
+      "Show the working tree status. Lists modified, added, deleted, and untracked files.",
+    parameters: {
+      type: "object",
+      properties: {},
+    },
+  },
+  gitDiff: {
+    description:
+      "Show unstaged file changes. Set staged=true to see staged changes instead. Returns a summary and the full diff.",
+    parameters: {
+      type: "object",
+      properties: {
+        staged: {
+          type: "boolean",
+          description: "Show staged changes instead of unstaged. Default false.",
+        },
+        maxLines: {
+          type: "number",
+          description: "Max diff lines to return. Default 200.",
+        },
+      },
+    },
+  },
+  gitLog: {
+    description:
+      "Show recent git commits with hash, message, and time ago.",
+    parameters: {
+      type: "object",
+      properties: {
+        count: {
+          type: "number",
+          description: "Number of commits to show. Default 10.",
+        },
+      },
+    },
+  },
 };

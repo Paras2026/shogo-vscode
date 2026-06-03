@@ -4,6 +4,7 @@ import { applyPatchTool, writeFileTool } from "../tools/editTools";
 import { listFilesTool, readFileTool, searchWorkspaceTool } from "../tools/fileTools";
 import { runCommandTool } from "../tools/runCommand";
 import { codeIndexTool, dependencyGraphTool } from "../tools/codeIndexTools";
+import { gitStatusTool, gitDiffTool, gitLogTool } from "../tools/gitTools";
 import { logInfo, logError } from "../logger";
 
 const toolList: ToolDefinition[] = [
@@ -16,6 +17,9 @@ const toolList: ToolDefinition[] = [
   runCommandTool,
   codeIndexTool,
   dependencyGraphTool,
+  gitStatusTool,
+  gitDiffTool,
+  gitLogTool,
 ];
 
 const tools = new Map(toolList.map((tool) => [tool.name, tool]));
@@ -30,6 +34,9 @@ const REQUIRED_PARAMS: Record<string, string[]> = {
   getDiagnostics: [],
   codeIndex: ["name"],
   dependencyGraph: ["path"],
+  gitStatus: [],
+  gitDiff: [],
+  gitLog: [],
 };
 
 const PARAM_TYPES: Record<string, Record<string, "string" | "number" | "boolean">> = {
@@ -42,6 +49,9 @@ const PARAM_TYPES: Record<string, Record<string, "string" | "number" | "boolean"
   getDiagnostics: { max: "number" },
   codeIndex: { name: "string" },
   dependencyGraph: { path: "string", direction: "string" },
+  gitStatus: {},
+  gitDiff: { staged: "boolean", maxLines: "number" },
+  gitLog: { count: "number" },
 };
 
 /**
