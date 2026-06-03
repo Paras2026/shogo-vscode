@@ -31,14 +31,44 @@ export interface StreamOptions {
 
 let nativeToolUseFailed = false;
 
+const STREAM_TIMEOUT_MS = 120000;
+
+/**
+ * Races a promise against a timeout. Rejects with a clear error if it stalls.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`Stream timed out after ${Math.round(ms / 1000)}s (${label}). The model may be invalid or the gateway is unreachable.`));
+    }, ms);
+    promise.then(
+      (val) => { clearTimeout(timer); resolve(val); },
+      (err) => { clearTimeout(timer); reject(err); }
+    );
+  });
+}
+
+/**
+ * Validates the model name against known models and warns early.
+ */
+function validateModel(model: string): string {
+  const known = [
+    "claude-sonnet-4-5", "claude-haiku-4-5-20251001", "claude-3-5-sonnet-20241022",
+    "claude-3-haiku-20240307", "gpt-4o", "gpt-4o-mini", "gpt-4-turbo",
+    "hoshi-1.0",
+  ];
+  if (!known.some((k) => model.includes(k))) {
+    logWarn(`Unknown model "${model}". Known: ${known.join(", ")}. Proceeding anyway — gateway may reject it.`);
+  }
+  return model;
+}
+
 /**
  * Streams a chat completion from the Shogo Cloud LLM gateway.
- *
- * Tries native tool_use once. If the gateway doesn't support it,
- * skips native for all subsequent calls — no more 2x latency.
  */
 export async function streamChat(opts: StreamOptions): Promise<StreamResult> {
-  logInfo(`streamChat: model=${opts.model}, messages=${opts.messages.length}, system=${opts.system.length} chars`);
+  const model = validateModel(opts.model);
+  logInfo(`streamChat: model=${model}, messages=${opts.messages.length}, system=${opts.system.length} chars`);
 
   const provider = createShogoLlmProvider(
     opts.apiUrl
@@ -54,11 +84,19 @@ export async function streamChat(opts: StreamOptions): Promise<StreamResult> {
   if (!nativeToolUseFailed) {
     try {
       logDebug("Attempting native tool_use stream...");
-      const result = await streamWithNativeTools(provider, opts.model, coreMessages, opts);
+      const result = await withTimeout(
+        streamWithNativeTools(provider, model, coreMessages, opts),
+        STREAM_TIMEOUT_MS,
+        "native tool_use"
+      );
       if (result.text.length === 0 && result.toolCalls.length === 0) {
         logWarn("Native tool_use returned empty — switching to text mode permanently");
         nativeToolUseFailed = true;
-        return streamWithTextFallback(provider, opts.model, coreMessages, opts);
+        return withTimeout(
+          streamWithTextFallback(provider, model, coreMessages, opts),
+          STREAM_TIMEOUT_MS,
+          "text fallback after empty native"
+        );
       }
       return result;
     } catch (nativeError: unknown) {
@@ -68,7 +106,11 @@ export async function streamChat(opts: StreamOptions): Promise<StreamResult> {
     }
   }
 
-  return streamWithTextFallback(provider, opts.model, coreMessages, opts);
+  return withTimeout(
+    streamWithTextFallback(provider, model, coreMessages, opts),
+    STREAM_TIMEOUT_MS,
+    "text fallback"
+  );
 }
 
 async function streamWithNativeTools(
