@@ -1,4 +1,5 @@
 import { spawn } from "child_process";
+import * as os from "os";
 import * as vscode from "vscode";
 import type { ToolDefinition, ToolExecutionContext, ToolResult } from "../agent/types";
 import { classifyCommand } from "../safety/commandPolicy";
@@ -7,6 +8,17 @@ import { getWorkspaceRoot, truncateText } from "./workspace";
 const MAX_OUTPUT_CHARS = 60000;
 const DEFAULT_TIMEOUT_MS = 120000;
 let outputChannel: vscode.OutputChannel | undefined;
+
+function getDefaultShell(): string {
+  const platform = os.platform();
+  if (platform === "win32") {
+    return process.env.COMSPEC || "cmd.exe";
+  }
+  if (platform === "darwin") {
+    return process.env.SHELL || "/bin/zsh";
+  }
+  return process.env.SHELL || "/bin/sh";
+}
 
 function getOutputChannel(): vscode.OutputChannel {
   outputChannel ??= vscode.window.createOutputChannel("Shogo Commands");
@@ -78,12 +90,11 @@ async function runCommand(
     channel.appendLine(`\n$ ${command}`);
     channel.show(true);
 
-    const child = spawn(command, {
-      cwd,
-      shell: true,
-      windowsHide: true,
-      env: process.env,
-    });
+    const shell = getDefaultShell();
+    const isWindows = os.platform() === "win32";
+    const child = isWindows
+      ? spawn(shell, ["/c", command], { cwd, env: process.env, windowsHide: true })
+      : spawn(shell, ["-c", command], { cwd, env: process.env });
 
     let stdout = "";
     let stderr = "";

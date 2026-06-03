@@ -6,10 +6,11 @@ export interface WorkspaceContext {
   language?: string;
   selection?: string;
   fullText?: string;
+  extraInstructions?: string;
 }
 
-const MAX_FILE_CHARS = 12000;
-const MAX_SELECTION_CHARS = 4000;
+const MAX_FILE_CHARS = 4000;
+const MAX_SELECTION_CHARS = 2000;
 
 export function gatherContext(): WorkspaceContext {
   const ctx: WorkspaceContext = {};
@@ -38,8 +39,8 @@ export function gatherContext(): WorkspaceContext {
 
 export function buildSystemPrompt(ctx: WorkspaceContext): string {
   const parts: string[] = [
-    "You are Shogo, an AI coding assistant embedded in the user's VS Code editor.",
-    "Answer concisely. Use Markdown. When you write code, use fenced code blocks with the language.",
+    "You are Shogo, an AI coding assistant in VS Code. Answer concisely. Use Markdown with fenced code blocks.",
+    "For workspace actions, use local tools instead of claiming you performed work from text alone.",
   ];
 
   if (ctx.workspaceName) {
@@ -56,6 +57,9 @@ export function buildSystemPrompt(ctx: WorkspaceContext): string {
     parts.push(
       `Here is the content of the active file:\n\n\`\`\`${ctx.language ?? ""}\n${ctx.fullText}\n\`\`\``
     );
+  }
+  if (ctx.extraInstructions) {
+    parts.push(ctx.extraInstructions);
   }
 
   return parts.join("\n\n");

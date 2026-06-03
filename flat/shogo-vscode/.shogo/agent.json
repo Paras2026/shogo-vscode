@@ -1,0 +1,6 @@
+{
+  "approvalMode": "ask",
+  "maxToolSteps": 16,
+  "preferredSearch": "workspace",
+  "autoIndex": false
+}

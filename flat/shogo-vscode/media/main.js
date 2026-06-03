@@ -164,15 +164,16 @@
       case "assistantStart":
         setStreaming(true);
         currentAssistantRaw = "";
-        currentAssistantEl = addMessage("assistant", "");
-        currentAssistantEl.classList.add("cursor");
+        currentAssistantEl = null;
         break;
       case "assistantToken":
-        if (currentAssistantEl) {
-          currentAssistantRaw += msg.text;
-          currentAssistantEl.innerHTML = renderMarkdown(currentAssistantRaw);
-          scrollToBottom();
+        if (!currentAssistantEl) {
+          currentAssistantEl = addMessage("assistant", "");
+          currentAssistantEl.classList.add("cursor");
         }
+        currentAssistantRaw += msg.text;
+        currentAssistantEl.innerHTML = renderMarkdown(currentAssistantRaw);
+        scrollToBottom();
         break;
       case "assistantEnd":
         if (currentAssistantEl) {

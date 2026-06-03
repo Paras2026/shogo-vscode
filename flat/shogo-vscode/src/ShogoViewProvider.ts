@@ -1,6 +1,8 @@
 import * as vscode from "vscode";
 import { getApiKey, setApiKey } from "./auth";
 import { runAgentLoop } from "./agent/agentLoop";
+import { buildConfigInstructions, loadAgentConfig } from "./agent/config";
+import { SessionStore } from "./agent/sessionStore";
 import type { ApprovalRequest } from "./agent/types";
 import { buildSystemPrompt, gatherContext } from "./context";
 import type { ChatMessage } from "./shogoClient";
@@ -10,10 +12,13 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
 
   private view?: vscode.WebviewView;
   private history: ChatMessage[] = [];
+  private readonly sessionStore: SessionStore;
   private abortController?: AbortController;
   private pendingApprovals = new Map<string, (approved: boolean) => void>();
 
-  constructor(private readonly context: vscode.ExtensionContext) {}
+  constructor(private readonly context: vscode.ExtensionContext) {
+    this.sessionStore = new SessionStore(context);
+  }
 
   public resolveWebviewView(webviewView: vscode.WebviewView): void {
     this.view = webviewView;
@@ -53,6 +58,7 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
     this.abortController?.abort();
     this.rejectAllApprovals();
     this.history = [];
+    this.sessionStore.reset();
     this.post({ type: "clear" });
   }
 
@@ -88,8 +94,10 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
     const model = config.get<string>("model", "claude-sonnet-4-5");
     const includeFile = config.get<boolean>("includeActiveFile", true);
     const apiUrl = config.get<string>("apiUrl", "");
+    const agentConfig = await loadAgentConfig();
 
     const ctx = includeFile ? gatherContext() : { workspaceName: undefined };
+    ctx.extraInstructions = buildConfigInstructions(agentConfig);
     const system = buildSystemPrompt(ctx);
 
     this.history.push({ role: "user", content: trimmed });
@@ -107,6 +115,7 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
         system,
         messages: this.history,
         extensionContext: this.context,
+        maxSteps: agentConfig.maxToolSteps,
         signal: this.abortController.signal,
         onActivity: (text) => {
           this.post({ type: "toolActivity", text });
@@ -117,6 +126,7 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
         requestApproval: (request) => this.requestApproval(request),
       });
       this.history.push({ role: "assistant", content: assistantText });
+      await this.sessionStore.save(this.history);
     } catch (err: unknown) {
       const message = this.describeError(err);
       this.post({ type: "error", text: message });

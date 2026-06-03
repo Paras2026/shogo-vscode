@@ -18,12 +18,12 @@ export const listFilesTool: ToolDefinition = {
     type: "object",
     properties: {
       pattern: { type: "string", description: "Optional glob, default **/*" },
-      max: { type: "number", description: "Maximum files to return, default 200" },
+      max: { type: "number", description: "Maximum files to return, default 100" },
     },
   },
   async execute(input): Promise<ToolResult> {
     const pattern = typeof input.pattern === "string" ? input.pattern : "**/*";
-    const max = typeof input.max === "number" ? Math.min(Math.max(input.max, 1), 1000) : 200;
+    const max = typeof input.max === "number" ? Math.min(Math.max(input.max, 1), 1000) : 100;
     const files = await vscode.workspace.findFiles(pattern, DEFAULT_EXCLUDE, max);
     return { ok: true, data: { files: files.map(asRelative) } };
   },
@@ -37,7 +37,7 @@ export const readFileTool: ToolDefinition = {
     required: ["path"],
     properties: {
       path: { type: "string", description: "Workspace-relative file path" },
-      maxChars: { type: "number", description: "Optional max chars, default 20000" },
+      maxChars: { type: "number", description: "Optional max chars, default 8000" },
     },
   },
   async execute(input): Promise<ToolResult> {
@@ -51,7 +51,7 @@ export const readFileTool: ToolDefinition = {
     const uri = resolveWorkspacePath(rel);
     const bytes = await vscode.workspace.fs.readFile(uri);
     const text = Buffer.from(bytes).toString("utf8");
-    const maxChars = typeof input.maxChars === "number" ? input.maxChars : 20000;
+    const maxChars = typeof input.maxChars === "number" ? input.maxChars : 8000;
     return { ok: true, data: { path: rel, content: truncateText(text, maxChars) } };
   },
 };
@@ -65,20 +65,27 @@ export const searchWorkspaceTool: ToolDefinition = {
     properties: {
       query: { type: "string", description: "Text to search for" },
       pattern: { type: "string", description: "Optional glob, default **/*" },
-      maxFiles: { type: "number", description: "Max files to scan, default 500" },
-      maxMatches: { type: "number", description: "Max matches to return, default 50" },
+      maxFiles: { type: "number", description: "Max files to scan, default 200" },
+      maxMatches: { type: "number", description: "Max matches to return, default 30" },
+      regex: { type: "boolean", description: "Treat query as a JavaScript regular expression" },
+      caseSensitive: { type: "boolean", description: "Use case-sensitive matching" },
+      contextLines: { type: "number", description: "Include N lines before/after each match, default 0" },
     },
   },
   async execute(input): Promise<ToolResult> {
     if (typeof input.query !== "string" || !input.query.trim()) {
       return { ok: false, error: "query must be a non-empty string" };
     }
-    const query = input.query.toLowerCase();
+    const rawQuery = input.query.trim();
     const pattern = typeof input.pattern === "string" ? input.pattern : "**/*";
-    const maxFiles = typeof input.maxFiles === "number" ? Math.min(input.maxFiles, 2000) : 500;
-    const maxMatches = typeof input.maxMatches === "number" ? Math.min(input.maxMatches, 200) : 50;
+    const maxFiles = typeof input.maxFiles === "number" ? Math.min(Math.max(input.maxFiles, 1), 5000) : 200;
+    const maxMatches = typeof input.maxMatches === "number" ? Math.min(Math.max(input.maxMatches, 1), 500) : 30;
+    const contextLines = typeof input.contextLines === "number" ? Math.min(Math.max(input.contextLines, 0), 5) : 0;
+    const caseSensitive = input.caseSensitive === true;
+    const regex = input.regex === true ? new RegExp(rawQuery, caseSensitive ? "" : "i") : undefined;
+    const literalQuery = caseSensitive ? rawQuery : rawQuery.toLowerCase();
     const files = await vscode.workspace.findFiles(pattern, DEFAULT_EXCLUDE, maxFiles);
-    const matches: Array<{ path: string; line: number; text: string }> = [];
+    const matches: Array<{ path: string; line: number; column: number; text: string; context?: string }> = [];
 
     for (const uri of files) {
       const rel = asRelative(uri);
@@ -91,10 +98,22 @@ export const searchWorkspaceTool: ToolDefinition = {
         const text = Buffer.from(bytes).toString("utf8");
         const lines = text.split(/\r?\n/);
         for (let i = 0; i < lines.length; i++) {
-          if (lines[i].toLowerCase().includes(query)) {
-            matches.push({ path: rel, line: i + 1, text: truncateText(lines[i].trim(), 300) });
+          const line = lines[i];
+          const haystack = caseSensitive ? line : line.toLowerCase();
+          const match = regex ? line.match(regex) : undefined;
+          const column = regex ? match?.index ?? -1 : haystack.indexOf(literalQuery);
+          if (column >= 0) {
+            const start = Math.max(0, i - contextLines);
+            const end = Math.min(lines.length, i + contextLines + 1);
+            matches.push({
+              path: rel,
+              line: i + 1,
+              column: column + 1,
+              text: truncateText(line.trim(), 300),
+              context: contextLines > 0 ? truncateText(lines.slice(start, end).join("\n"), 1000) : undefined,
+            });
             if (matches.length >= maxMatches) {
-              return { ok: true, data: { query: input.query, matches } };
+              return { ok: true, data: { query: input.query, scannedFiles: files.length, matches } };
             }
           }
         }
@@ -103,6 +122,6 @@ export const searchWorkspaceTool: ToolDefinition = {
       }
     }
 
-    return { ok: true, data: { query: input.query, matches } };
+    return { ok: true, data: { query: input.query, scannedFiles: files.length, matches } };
   },
 };
