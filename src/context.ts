@@ -62,6 +62,12 @@ export function buildSystemPrompt(ctx: WorkspaceContext): string {
     "- When editing a function, read only 20-30 lines around it, not the whole file.",
     "- Use the line numbers in readFile output to target applyPatch precisely.",
     "- Workflow: projectMap -> searchWorkspace -> readFile(startLine, endLine) -> applyPatch",
+    "",
+    "## Code Graph Tools",
+    "- buildCallGraph: Build the call graph first before using graph tools",
+    "- impactAnalysis(function): Find what breaks if you change a function",
+    "- deadCode: Find unused functions that can be removed",
+    "- callChain(from, to): Trace execution path between two functions",
   ];
 
   if (ctx.workspaceName) {

@@ -6,6 +6,7 @@ import { runCommandTool } from "../tools/runCommand";
 import { codeIndexTool, dependencyGraphTool } from "../tools/codeIndexTools";
 import { gitStatusTool, gitDiffTool, gitLogTool } from "../tools/gitTools";
 import { projectMapTool } from "../tools/projectMap";
+import { buildCallGraphTool, impactAnalysisTool, deadCodeTool, callChainTool } from "../tools/codeGraphTools";
 import { logInfo, logError } from "../logger";
 
 const toolList: ToolDefinition[] = [
@@ -22,6 +23,10 @@ const toolList: ToolDefinition[] = [
   gitDiffTool,
   gitLogTool,
   projectMapTool,
+  buildCallGraphTool,
+  impactAnalysisTool,
+  deadCodeTool,
+  callChainTool,
 ];
 
 const tools = new Map(toolList.map((tool) => [tool.name, tool]));
@@ -40,6 +45,10 @@ const REQUIRED_PARAMS: Record<string, string[]> = {
   gitDiff: [],
   gitLog: [],
   projectMap: [],
+  buildCallGraph: [],
+  impactAnalysis: ["function"],
+  deadCode: [],
+  callChain: ["from", "to"],
 };
 
 const PARAM_TYPES: Record<string, Record<string, "string" | "number" | "boolean">> = {
@@ -56,6 +65,10 @@ const PARAM_TYPES: Record<string, Record<string, "string" | "number" | "boolean"
   gitDiff: { staged: "boolean", maxLines: "number" },
   gitLog: { count: "number" },
   projectMap: { pattern: "string", maxFiles: "number", withSymbols: "boolean" },
+  buildCallGraph: { pattern: "string" },
+  impactAnalysis: { function: "string", depth: "number" },
+  deadCode: {},
+  callChain: { from: "string", to: "string", maxDepth: "number" },
 };
 
 /**

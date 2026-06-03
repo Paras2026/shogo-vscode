@@ -241,4 +241,65 @@ export const TOOL_DEFINITIONS: Record<string, { description: string; parameters:
       },
     },
   },
+  buildCallGraph: {
+    description:
+      "Build a call graph showing which functions call which. Run this first before impactAnalysis, deadCode, or callChain. Cached for 30 seconds.",
+    parameters: {
+      type: "object",
+      properties: {
+        pattern: {
+          type: "string",
+          description: 'Optional glob filter. Example: "src/**/*.ts"',
+        },
+      },
+    },
+  },
+  impactAnalysis: {
+    description:
+      "Find what would break if you change a function. Walks the call graph backwards to find all callers and their callers. Use before making risky changes.",
+    parameters: {
+      type: "object",
+      properties: {
+        function: {
+          type: "string",
+          description: "Function name to analyze",
+        },
+        depth: {
+          type: "number",
+          description: "Max depth to traverse. Default 4.",
+        },
+      },
+      required: ["function"],
+    },
+  },
+  deadCode: {
+    description:
+      "Find functions that are never called by anything else. Identifies unused code that can be safely removed.",
+    parameters: {
+      type: "object",
+      properties: {},
+    },
+  },
+  callChain: {
+    description:
+      "Trace the execution path from one function to another. Shows how the code flows between them.",
+    parameters: {
+      type: "object",
+      properties: {
+        from: {
+          type: "string",
+          description: "Starting function name",
+        },
+        to: {
+          type: "string",
+          description: "Target function name",
+        },
+        maxDepth: {
+          type: "number",
+          description: "Max chain depth. Default 6.",
+        },
+      },
+      required: ["from", "to"],
+    },
+  },
 };
