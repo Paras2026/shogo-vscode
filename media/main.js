@@ -63,7 +63,7 @@
 
   function linkifyFilePaths(text) {
     text = text.replace(
-      /(?<![\"`\w])([\.\/]?\w[\w\-\/]*\/[\w\-\/]*\.\w{1,5})\s*\(line\s+(\d+)\)/g,
+      /(?<![\"`\w])([\.\/]?\w[\w\-\/]*\/[\w\-\/]*\.\w{1,5})\s*[\(,]\s*line\s+(\d+)/g,
       '<a href="#" class="file-link" data-path="$1" data-line="$2">$1 (line $2)</a>'
     );
     text = text.replace(
