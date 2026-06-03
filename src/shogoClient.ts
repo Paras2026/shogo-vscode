@@ -55,7 +55,7 @@ function validateModel(model: string): string {
   const known = [
     "claude-sonnet-4-5", "claude-haiku-4-5-20251001", "claude-3-5-sonnet-20241022",
     "claude-3-haiku-20240307", "gpt-4o", "gpt-4o-mini", "gpt-4-turbo",
-    "hoshi-1.0",
+    "hoshi-1.0", "opus-4.8", "gpt-5.5", "sonnet-4.6", "gpt-5.4-mini", "gpt-5.4-nano",
   ];
   if (!known.some((k) => model.includes(k))) {
     logWarn(`Unknown model "${model}". Known: ${known.join(", ")}. Proceeding anyway — gateway may reject it.`);
@@ -171,6 +171,9 @@ async function streamWithTextFallback(
   logInfo(`Parsed tool calls from text: ${toolCalls.length} — ${toolCalls.map((t) => t.toolName).join(", ") || "none"}`);
   if (full.length === 0) {
     logWarn("Stream returned EMPTY text — the model produced no output");
+    throw new Error(
+      `The model "${opts.model}" returned no output. It may not be supported by the Shogo Cloud gateway. Try switching to "Claude Sonnet 4.5" in the model dropdown.`
+    );
   }
 
   return { text: full, toolCalls };

@@ -197,6 +197,12 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
       if (m.includes("429")) {
         return "Rate limited (429). Please wait and try again.";
       }
+      if (m.includes("no output") || m.includes("returned no output")) {
+        return `⚠️ Model unavailable: ${m}`;
+      }
+      if (m.includes("timed out")) {
+        return `⏱️ ${m}`;
+      }
       return `Error: ${m}`;
     }
     return "An unknown error occurred.";
