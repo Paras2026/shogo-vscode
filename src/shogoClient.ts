@@ -53,9 +53,8 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
  */
 function validateModel(model: string): string {
   const known = [
-    "claude-sonnet-4-5", "claude-haiku-4-5-20251001", "claude-3-5-sonnet-20241022",
-    "claude-3-haiku-20240307", "gpt-4o", "gpt-4o-mini", "gpt-4-turbo",
-    "hoshi-1.0", "opus-4.8", "gpt-5.5", "sonnet-4.6", "gpt-5.4-mini", "gpt-5.4-nano",
+    "mimo-v2.5", "claude-sonnet-4-6", "claude-sonnet-4-5",
+    "claude-haiku-4-5-20251001", "gpt-4o", "gpt-4o-mini",
   ];
   if (!known.some((k) => model.includes(k))) {
     logWarn(`Unknown model "${model}". Known: ${known.join(", ")}. Proceeding anyway — gateway may reject it.`);
@@ -70,31 +69,10 @@ export async function streamChat(opts: StreamOptions): Promise<StreamResult> {
   const model = validateModel(opts.model);
   logInfo(`streamChat: model=${model}, messages=${opts.messages.length}, system=${opts.system.length} chars`);
 
-  const debugFetch: typeof fetch = async (input, init) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    if (url.includes("/chat/completions") || url.includes("/ai/v1")) {
-      logDebug(`HTTP ${init?.method ?? "GET"} ${url}`);
-      if (init?.body) {
-        try {
-          const bodyObj = JSON.parse(String(init.body));
-          logDebug(`  → model: "${bodyObj.model}", messages: ${bodyObj.messages?.length ?? "?"}, tools: ${bodyObj.tools?.length ?? 0}`);
-        } catch { /* not JSON */ }
-      }
-      const response = await fetch(input, init);
-      const cloned = response.clone();
-      cloned.text().then((t) => {
-        const preview = t.length > 500 ? t.slice(0, 500) + "..." : t;
-        logDebug(`  ← HTTP ${response.status} (${t.length} bytes): ${preview}`);
-      }).catch(() => {});
-      return response;
-    }
-    return fetch(input, init);
-  };
-
   const provider = createShogoLlmProvider(
     opts.apiUrl
-      ? { apiKey: opts.apiKey, baseUrl: opts.apiUrl, fetch: debugFetch }
-      : { apiKey: opts.apiKey, fetch: debugFetch }
+      ? { apiKey: opts.apiKey, baseUrl: opts.apiUrl }
+      : { apiKey: opts.apiKey }
   );
 
   const coreMessages: ModelMessage[] = opts.messages.map((m) => ({
