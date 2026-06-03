@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { streamChat, type ChatMessage, type StructuredToolCall } from "../shogoClient";
+import { logInfo as logInfoImport, logError, logDebug, logWarn } from "../logger";
 import { executeTool, getToolDescriptions, validateToolInput } from "./toolRegistry";
 import type { ApprovalRequest, ToolResult } from "./types";
 import { logInfo, logError, logWarn, logDebug } from "../logger";
@@ -38,6 +39,33 @@ function trimHistory(messages: ChatMessage[]): ChatMessage[] {
     trimmed.unshift(messages[i]);
   }
   return trimmed;
+}
+
+
+function parseTextToolCalls(text: string): StructuredToolCall[] {
+  const trimmed = text.trim();
+  const start = trimmed.indexOf("{");
+  const end = trimmed.lastIndexOf("}");
+  if (start === -1 || end <= start) return [];
+
+  try {
+    const parsed = JSON.parse(trimmed.slice(start, end + 1)) as Record<string, unknown>;
+    const toolName = typeof parsed.tool === "string" ? parsed.tool
+      : typeof parsed.name === "string" ? parsed.name
+      : undefined;
+    if (!toolName) return [];
+
+    let input: Record<string, unknown> = {};
+    if (parsed.input && typeof parsed.input === "object" && !Array.isArray(parsed.input)) {
+      input = parsed.input as Record<string, unknown>;
+    } else if (parsed.arguments && typeof parsed.arguments === "object") {
+      input = parsed.arguments as Record<string, unknown>;
+    }
+
+    return [{ toolCallId: `text-${Date.now()}`, toolName, input }];
+  } catch {
+    return [];
+  }
 }
 
 export async function runAgentLoop(opts: AgentLoopOptions): Promise<string> {
