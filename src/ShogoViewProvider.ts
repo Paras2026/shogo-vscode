@@ -246,10 +246,13 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
   <div id="composer">
     <div class="composer-top">
       <select id="model-select">
-        <option value="claude-sonnet-4-5">Claude Sonnet 4.5</option>
-        <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
         <option value="hoshi-1.0">Hoshi 1.0</option>
-        <option value="gpt-4o">GPT-4o</option>
+        <option value="opus-4.8">Opus 4.8</option>
+        <option value="gpt-5.5">GPT-5.5</option>
+        <option value="sonnet-4.6">Sonnet 4.6</option>
+        <option value="gpt-5.4-mini">GPT-5.4 Mini</option>
+        <option value="gpt-5.4-nano">GPT-5.4 Nano</option>
+        <option value="claude-sonnet-4-5">Claude Sonnet 4.5</option>
       </select>
     </div>
     <textarea id="input" rows="2" placeholder="Ask Shogo... (Enter to send, Shift+Enter for newline)"></textarea>
