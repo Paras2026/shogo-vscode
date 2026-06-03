@@ -43,7 +43,7 @@ const REQUIRED_PARAMS: Record<string, string[]> = {
 };
 
 const PARAM_TYPES: Record<string, Record<string, "string" | "number" | "boolean">> = {
-  readFile: { path: "string", maxChars: "number" },
+  readFile: { path: "string", startLine: "number", endLine: "number", maxChars: "number" },
   listFiles: { pattern: "string", max: "number" },
   searchWorkspace: { query: "string", pattern: "string", maxFiles: "number", maxMatches: "number" },
   applyPatch: { path: "string", oldText: "string", newText: "string" },
@@ -66,7 +66,7 @@ export function validateToolInput(toolName: string, input: Record<string, unknow
   const required = REQUIRED_PARAMS[toolName];
   if (required) {
     for (const param of required) {
-      if (input[param] === undefined || input[param] === null) {
+      if (input[param] === undefined || input[param] === null || input[param] === "") {
         return `Missing required parameter "${param}".`;
       }
     }
@@ -76,16 +76,20 @@ export function validateToolInput(toolName: string, input: Record<string, unknow
   if (types) {
     for (const [param, expectedType] of Object.entries(types)) {
       const value = input[param];
-      if (value !== undefined && value !== null) {
-        if (expectedType === "string" && typeof value !== "string") {
-          return `Parameter "${param}" must be a string, got ${typeof value}.`;
+      if (value === undefined || value === null) continue;
+
+      if (expectedType === "number" && typeof value === "string") {
+        const num = Number(value);
+        if (!isNaN(num)) {
+          input[param] = num;
+        } else {
+          return `Parameter "${param}" must be a number, got "${value}".`;
         }
-        if (expectedType === "number" && typeof value !== "number") {
-          return `Parameter "${param}" must be a number, got ${typeof value}.`;
-        }
-        if (expectedType === "boolean" && typeof value !== "boolean") {
-          return `Parameter "${param}" must be a boolean, got ${typeof value}.`;
-        }
+      }
+      if (expectedType === "boolean" && typeof value === "string") {
+        if (value === "true") { input[param] = true; }
+        else if (value === "false") { input[param] = false; }
+        else { return `Parameter "${param}" must be a boolean, got "${value}".`; }
       }
     }
   }

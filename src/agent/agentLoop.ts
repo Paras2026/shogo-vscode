@@ -66,7 +66,15 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<string> {
       },
     });
 
-    toolCalls = streamResult.toolCalls;
+    toolCalls = streamResult.toolCalls.map((tc) => {
+      let input = tc.input;
+      if (typeof input === "string") {
+        try { input = JSON.parse(input); } catch { /* keep as-is */ }
+      }
+      if (input === null || input === undefined) input = {};
+      if (typeof input !== "object" || Array.isArray(input)) input = {};
+      return { ...tc, input: input as Record<string, unknown> };
+    });
 
     if (toolCalls.length === 0) {
       logDebug(`No tool calls. Response text: ${responseText.length} chars`);
