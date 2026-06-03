@@ -267,8 +267,11 @@
     if (target.classList && target.classList.contains("file-link")) {
       var path = target.getAttribute("data-path");
       var line = target.getAttribute("data-line");
+      console.log("[Shogo] File link clicked:", { path: path, line: line, rawHTML: target.outerHTML });
       if (path) {
-        vscode.postMessage({ type: "openFile", path: path, line: line ? parseInt(line) : undefined });
+        var lineNum = line ? parseInt(line) : undefined;
+        console.log("[Shogo] Sending openFile:", { path: path, line: lineNum });
+        vscode.postMessage({ type: "openFile", path: path, line: lineNum });
       }
     }
   });

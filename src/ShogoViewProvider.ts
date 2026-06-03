@@ -187,10 +187,15 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async handleOpenFile(filePath: string, line?: number): Promise<void> {
+    logInfo(`handleOpenFile called: path="${filePath}", line=${line} (type: ${typeof line})`);
     try {
       const root = vscode.workspace.workspaceFolders?.[0];
-      if (!root) return;
+      if (!root) {
+        logError("No workspace folder found for openFile");
+        return;
+      }
       const fileUri = vscode.Uri.joinPath(root.uri, filePath);
+      logInfo(`Opening: ${fileUri.fsPath}`);
       const doc = await vscode.workspace.openTextDocument(fileUri);
       const editor = await vscode.window.showTextDocument(doc, { preview: true });
 
@@ -198,8 +203,10 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
         const pos = new vscode.Position(line - 1, 0);
         editor.selection = new vscode.Selection(pos, pos);
         editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
+        logInfo(`Jumped to line ${line} in ${filePath}`);
+      } else {
+        logInfo(`No line number to jump to (line=${line}, type=${typeof line})`);
       }
-      logInfo(`Opened file: ${filePath}${line ? `:${line}` : ""}`);
     } catch (err) {
       logError(`Failed to open file: ${filePath}`, err);
       vscode.window.showWarningMessage(`Could not open ${filePath}`);
