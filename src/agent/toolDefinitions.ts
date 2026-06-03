@@ -6,7 +6,7 @@
 export const TOOL_DEFINITIONS: Record<string, { description: string; parameters: Record<string, unknown> }> = {
   readFile: {
     description:
-      "Read a text file from the workspace. Returns the file content. Use this to inspect code before editing.",
+      "Read a text file from the workspace. Returns content with line numbers. For large files (500+ lines), ALWAYS use startLine/endLine to read only the section you need — never read the entire file.",
     parameters: {
       type: "object",
       properties: {
@@ -14,9 +14,19 @@ export const TOOL_DEFINITIONS: Record<string, { description: string; parameters:
           type: "string",
           description: "Workspace-relative file path (e.g. src/App.tsx)",
         },
+        startLine: {
+          type: "number",
+          description:
+            "First line to read (1-based). Use for large files. Default: 1.",
+        },
+        endLine: {
+          type: "number",
+          description:
+            "Last line to read (1-based, inclusive). Use with startLine for large files. Default: 200 or end of file.",
+        },
         maxChars: {
           type: "number",
-          description: "Maximum characters to return. Default 8000.",
+          description: "Maximum characters to return. Default 12000.",
         },
       },
       required: ["path"],
@@ -204,6 +214,29 @@ export const TOOL_DEFINITIONS: Record<string, { description: string; parameters:
         count: {
           type: "number",
           description: "Number of commits to show. Default 10.",
+        },
+      },
+    },
+  },
+  projectMap: {
+    description:
+      "Scan the workspace and return a lightweight project map with file paths, line counts, and exported symbols. Use this FIRST on large codebases to understand structure before reading individual files.",
+    parameters: {
+      type: "object",
+      properties: {
+        pattern: {
+          type: "string",
+          description:
+            'Optional glob to filter files. Default: all source files. Example: "src/**/*.ts"',
+        },
+        maxFiles: {
+          type: "number",
+          description: "Maximum files to index. Default 200.",
+        },
+        withSymbols: {
+          type: "boolean",
+          description:
+            "Include exported symbol names. Default true. Set false for faster scan.",
         },
       },
     },

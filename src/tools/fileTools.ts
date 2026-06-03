@@ -31,13 +31,27 @@ export const listFilesTool: ToolDefinition = {
 
 export const readFileTool: ToolDefinition = {
   name: "readFile",
-  description: "Read a text file from the workspace by relative path.",
+  description:
+    "Read a text file from the workspace. Supports line ranges for large files (startLine/endLine). Always returns line numbers. For files over 500 lines, use startLine/endLine to read only the section you need.",
   inputSchema: {
     type: "object",
     required: ["path"],
     properties: {
       path: { type: "string", description: "Workspace-relative file path" },
-      maxChars: { type: "number", description: "Optional max chars, default 8000" },
+      startLine: {
+        type: "number",
+        description:
+          "First line to read (1-based). Use with endLine for large files. Default: 1",
+      },
+      endLine: {
+        type: "number",
+        description:
+          "Last line to read (1-based, inclusive). Default: 200 or end of file.",
+      },
+      maxChars: {
+        type: "number",
+        description: "Optional max chars, default 12000",
+      },
     },
   },
   async execute(input): Promise<ToolResult> {
@@ -50,9 +64,43 @@ export const readFileTool: ToolDefinition = {
     }
     const uri = resolveWorkspacePath(rel);
     const bytes = await vscode.workspace.fs.readFile(uri);
-    const text = Buffer.from(bytes).toString("utf8");
-    const maxChars = typeof input.maxChars === "number" ? input.maxChars : 8000;
-    return { ok: true, data: { path: rel, content: truncateText(text, maxChars) } };
+    const fullText = Buffer.from(bytes).toString("utf8");
+    const lines = fullText.split(/\r?\n/);
+    const totalLines = lines.length;
+
+    const startLine =
+      typeof input.startLine === "number" && input.startLine >= 1
+        ? Math.floor(input.startLine)
+        : 1;
+    const endLine =
+      typeof input.endLine === "number" && input.endLine >= startLine
+        ? Math.min(Math.floor(input.endLine), totalLines)
+        : Math.min(startLine + 199, totalLines);
+
+    const selectedLines = lines.slice(startLine - 1, endLine);
+    const numbered = selectedLines
+      .map((line, i) => `${startLine + i}|${line}`)
+      .join("\n");
+
+    const maxChars =
+      typeof input.maxChars === "number" ? input.maxChars : 12000;
+    const truncated = truncateText(numbered, maxChars);
+
+    const meta: Record<string, string | number> = {
+      path: rel,
+      totalLines,
+      startLine,
+      endLine: Math.min(endLine, totalLines),
+    };
+
+    if (endLine < totalLines) {
+      meta.hint = `Lines ${endLine + 1}-${totalLines} not shown. Use endLine to read more.`;
+    }
+
+    return {
+      ok: true,
+      data: { ...meta, content: truncated },
+    };
   },
 };
 
