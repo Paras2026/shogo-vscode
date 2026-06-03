@@ -29,11 +29,13 @@ export interface StreamOptions {
   signal?: AbortSignal;
 }
 
+let nativeToolUseFailed = false;
+
 /**
  * Streams a chat completion from the Shogo Cloud LLM gateway.
  *
- * Attempts native tool_use first (tools passed in the API request).
- * Falls back to text-based parsing if the gateway doesn't support tools.
+ * Tries native tool_use once. If the gateway doesn't support it,
+ * skips native for all subsequent calls — no more 2x latency.
  */
 export async function streamChat(opts: StreamOptions): Promise<StreamResult> {
   logInfo(`streamChat: model=${opts.model}, messages=${opts.messages.length}, system=${opts.system.length} chars`);
@@ -49,25 +51,24 @@ export async function streamChat(opts: StreamOptions): Promise<StreamResult> {
     content: m.content,
   }));
 
-  try {
-    logDebug("Attempting native tool_use stream...");
-    const result = await streamWithNativeTools(provider, opts.model, coreMessages, opts);
-    if (result.text.length === 0 && result.toolCalls.length === 0) {
-      logWarn("Native tool_use returned empty — falling back to text-based");
-      return streamWithTextFallback(provider, opts.model, coreMessages, opts);
-    }
-    return result;
-  } catch (nativeError: unknown) {
-    const msg = nativeError instanceof Error ? nativeError.message : String(nativeError);
-    logWarn(`Native tool_use failed: ${msg}`);
-    logInfo("Falling back to text-based tool parsing (safe fallback)");
+  if (!nativeToolUseFailed) {
     try {
-      return await streamWithTextFallback(provider, opts.model, coreMessages, opts);
-    } catch (fallbackError: unknown) {
-      logError("Text fallback also failed", fallbackError);
-      throw nativeError;
+      logDebug("Attempting native tool_use stream...");
+      const result = await streamWithNativeTools(provider, opts.model, coreMessages, opts);
+      if (result.text.length === 0 && result.toolCalls.length === 0) {
+        logWarn("Native tool_use returned empty — switching to text mode permanently");
+        nativeToolUseFailed = true;
+        return streamWithTextFallback(provider, opts.model, coreMessages, opts);
+      }
+      return result;
+    } catch (nativeError: unknown) {
+      const msg = nativeError instanceof Error ? nativeError.message : String(nativeError);
+      logWarn(`Native tool_use failed: ${msg} — switching to text mode permanently`);
+      nativeToolUseFailed = true;
     }
   }
+
+  return streamWithTextFallback(provider, opts.model, coreMessages, opts);
 }
 
 async function streamWithNativeTools(
