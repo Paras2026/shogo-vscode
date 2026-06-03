@@ -6,6 +6,16 @@ import { buildSystemPrompt, gatherSmartWorkspaceContext } from "./context";
 import type { ChatMessage } from "./shogoClient";
 import { logInfo, logError, logDebug, initLogger, showOutputChannel } from "./logger";
 
+interface Session {
+  id: string;
+  title: string;
+  messages: ChatMessage[];
+  createdAt: number;
+}
+
+const MAX_SESSIONS = 50;
+const SESSIONS_KEY = "shogo.sessions";
+
 export class ShogoViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "shogo.chatView";
 
@@ -13,6 +23,7 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
   private history: ChatMessage[] = [];
   private abortController?: AbortController;
   private pendingApprovals = new Map<string, (approved: boolean) => void>();
+  private currentSessionId?: string;
 
   constructor(private readonly context: vscode.ExtensionContext) {
     initLogger();
@@ -31,7 +42,7 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
 
     webviewView.webview.html = this.getHtml(webviewView.webview);
 
-      webviewView.webview.onDidReceiveMessage(async (msg) => {
+    webviewView.webview.onDidReceiveMessage(async (msg) => {
       switch (msg.type) {
         case "ready":
           await this.refreshAuthState();
@@ -55,6 +66,15 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
         case "openFile":
           await this.handleOpenFile(msg.path);
           break;
+        case "listSessions":
+          this.handleListSessions();
+          break;
+        case "loadSession":
+          this.handleLoadSession(msg.sessionId);
+          break;
+        case "deleteSession":
+          this.handleDeleteSession(msg.sessionId);
+          break;
       }
     });
   }
@@ -62,7 +82,9 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
   public newChat(): void {
     this.abortController?.abort();
     this.rejectAllApprovals();
+    this.saveCurrentSession();
     this.history = [];
+    this.currentSessionId = undefined;
     this.post({ type: "clear" });
   }
 
@@ -185,6 +207,91 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
     this.pendingApprovals.clear();
   }
 
+  // ── Session Persistence ──
+
+  private getSessions(): Session[] {
+    return this.context.globalState.get<Session[]>(SESSIONS_KEY, []);
+  }
+
+  private async saveSessions(sessions: Session[]): Promise<void> {
+    await this.context.globalState.update(SESSIONS_KEY, sessions);
+  }
+
+  private saveCurrentSession(): void {
+    if (this.history.length === 0) return;
+
+    const sessions = this.getSessions();
+    const title = this.history[0]?.content?.slice(0, 50) || "Untitled";
+
+    if (this.currentSessionId) {
+      const idx = sessions.findIndex((s) => s.id === this.currentSessionId);
+      if (idx >= 0) {
+        sessions[idx].messages = [...this.history];
+        sessions[idx].title = title;
+      }
+    } else {
+      const session: Session = {
+        id: `s-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        title,
+        messages: [...this.history],
+        createdAt: Date.now(),
+      };
+      sessions.unshift(session);
+    }
+
+    while (sessions.length > MAX_SESSIONS) sessions.pop();
+    this.saveSessions(sessions);
+  }
+
+  private handleListSessions(): void {
+    const sessions = this.getSessions();
+    this.post({
+      type: "sessionList",
+      sessions: sessions.map((s) => ({
+        id: s.id,
+        title: s.title,
+        messageCount: s.messages.length,
+        createdAt: s.createdAt,
+      })),
+    });
+  }
+
+  private handleLoadSession(sessionId: string): void {
+    const sessions = this.getSessions();
+    const session = sessions.find((s) => s.id === sessionId);
+    if (!session) {
+      this.post({ type: "error", text: "Session not found." });
+      return;
+    }
+
+    this.abortController?.abort();
+    this.rejectAllApprovals();
+
+    this.currentSessionId = session.id;
+    this.history = [...session.messages];
+    this.post({ type: "clear" });
+
+    for (const msg of session.messages) {
+      if (msg.role === "user") {
+        this.post({ type: "userMessage", text: msg.content });
+      } else if (msg.role === "assistant") {
+        this.post({ type: "assistantStart" });
+        this.post({ type: "assistantToken", text: msg.content });
+        this.post({ type: "assistantEnd" });
+      }
+    }
+
+    logInfo(`Loaded session: ${session.title} (${session.messages.length} messages)`);
+  }
+
+  private handleDeleteSession(sessionId: string): void {
+    const sessions = this.getSessions().filter((s) => s.id !== sessionId);
+    this.saveSessions(sessions);
+    if (this.currentSessionId === sessionId) {
+      this.currentSessionId = undefined;
+    }
+  }
+
   private describeError(err: unknown): string {
     if (err instanceof Error) {
       if (err.name === "AbortError") {
@@ -240,7 +347,7 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
     </div>
     <div style="display:flex;gap:4px;align-items:center;">
       <button id="history-btn" title="Chat History">☰</button>
-      <button id="new-chat-btn" title="New Chat">+</button>
+      <button id="new-chat-btn" title="New Chat">＋</button>
     </div>
   </div>
   <div id="history-drawer"></div>

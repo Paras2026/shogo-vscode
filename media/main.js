@@ -1,28 +1,53 @@
 (function () {
-  const vscode = acquireVsCodeApi();
+  var vscode = acquireVsCodeApi();
 
-  const messagesEl = document.getElementById("messages");
-  const inputEl = document.getElementById("input");
-  const sendBtn = document.getElementById("send-btn");
-  const stopBtn = document.getElementById("stop-btn");
-  const authBanner = document.getElementById("auth-banner");
-  const setKeyBtn = document.getElementById("set-key-btn");
-  const modelSelect = document.getElementById("model-select");
-  const historyBtn = document.getElementById("history-btn");
-  const historyDrawer = document.getElementById("history-drawer");
-  const newChatBtn = document.getElementById("new-chat-btn");
+  var messagesEl = document.getElementById("messages");
+  var inputEl = document.getElementById("input");
+  var sendBtn = document.getElementById("send-btn");
+  var stopBtn = document.getElementById("stop-btn");
+  var authBanner = document.getElementById("auth-banner");
+  var setKeyBtn = document.getElementById("set-key-btn");
+  var modelSelect = document.getElementById("model-select");
+  var historyBtn = document.getElementById("history-btn");
+  var historyDrawer = document.getElementById("history-drawer");
+  var newChatBtn = document.getElementById("new-chat-btn");
 
-  let currentAssistantRaw = "";
-  let currentAssistantEl = null;
-  let streaming = false;
-  let chatTitle = "New Chat";
-  let sessionHistory = [];
+  var currentAssistantRaw = "";
+  var currentAssistantEl = null;
+  var streaming = false;
+  var chatTitle = "New Chat";
+  var spinnerEl = null;
 
   function setStreaming(on) {
     streaming = on;
     sendBtn.classList.toggle("hidden", on);
     stopBtn.classList.toggle("hidden", !on);
     inputEl.disabled = on;
+
+    if (on) {
+      showSpinner();
+    } else {
+      hideSpinner();
+    }
+  }
+
+  function showSpinner() {
+    if (spinnerEl) return;
+    var wrap = document.createElement("div");
+    wrap.className = "spinner-wrap";
+    wrap.innerHTML =
+      '<div class="spinner"></div>' +
+      '<span class="spinner-text">Thinking...</span>';
+    messagesEl.appendChild(wrap);
+    spinnerEl = wrap;
+    scrollToBottom();
+  }
+
+  function hideSpinner() {
+    if (spinnerEl) {
+      spinnerEl.remove();
+      spinnerEl = null;
+    }
   }
 
   function scrollToBottom() {
@@ -38,7 +63,7 @@
 
   function linkifyFilePaths(text) {
     return text.replace(
-      /(?<!["`])(src\/[\w\-/.]+\.\w{1,5}|lib\/[\w\-/.]+\.\w{1,5}|\.\/[\w\-/.]+\.\w{1,5})/g,
+      /(?<![\"`])(src\/[\w\-/.]+\.\w{1,5}|lib\/[\w\-/.]+\.\w{1,5}|\.\/[\w\-/.]+\.\w{1,5})/g,
       '<a href="#" class="file-link" data-path="$1">$1</a>'
     );
   }
@@ -200,7 +225,11 @@
   }
 
   function toggleHistory() {
+    var opening = !historyDrawer.classList.contains("open");
     historyDrawer.classList.toggle("open");
+    if (opening) {
+      vscode.postMessage({ type: "listSessions" });
+    }
   }
 
   sendBtn.addEventListener("click", send);
@@ -251,6 +280,7 @@
         currentAssistantEl = null;
         break;
       case "assistantToken":
+        hideSpinner();
         if (!currentAssistantEl) {
           currentAssistantEl = addMessage("assistant", "");
           currentAssistantEl.classList.add("cursor");
@@ -260,6 +290,7 @@
         scrollToBottom();
         break;
       case "assistantEnd":
+        hideSpinner();
         if (currentAssistantEl) {
           currentAssistantEl.classList.remove("cursor");
           currentAssistantEl = null;
@@ -273,6 +304,7 @@
         addApprovalCard(msg.request || {});
         break;
       case "error":
+        hideSpinner();
         if (currentAssistantEl) {
           currentAssistantEl.classList.remove("cursor");
           currentAssistantEl = null;
@@ -284,6 +316,7 @@
         messagesEl.innerHTML = "";
         currentAssistantRaw = "";
         currentAssistantEl = null;
+        spinnerEl = null;
         setStreaming(false);
         chatTitle = "New Chat";
         document.getElementById("header-logo").textContent = "⚡ Shogo";
@@ -306,18 +339,34 @@
     sessions.forEach(function (session) {
       var item = document.createElement("div");
       item.className = "history-item";
+
       var titleSpan = document.createElement("span");
       titleSpan.className = "history-item-title";
       titleSpan.textContent = session.title || "Untitled";
+
       var meta = document.createElement("span");
       meta.className = "history-item-meta";
       meta.textContent = (session.messageCount || 0) + " msgs";
+
+      var delBtn = document.createElement("button");
+      delBtn.className = "history-item-delete";
+      delBtn.textContent = "✕";
+      delBtn.title = "Delete session";
+
       item.appendChild(titleSpan);
       item.appendChild(meta);
-      item.addEventListener("click", function () {
+      item.appendChild(delBtn);
+
+      item.addEventListener("click", function (e) {
+        if (e.target === delBtn) {
+          vscode.postMessage({ type: "deleteSession", sessionId: session.id });
+          item.remove();
+          return;
+        }
         vscode.postMessage({ type: "loadSession", sessionId: session.id });
         historyDrawer.classList.remove("open");
       });
+
       historyDrawer.appendChild(item);
     });
   }
