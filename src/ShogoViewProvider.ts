@@ -64,7 +64,7 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
           this.newChat();
           break;
         case "openFile":
-          await this.handleOpenFile(msg.path);
+          await this.handleOpenFile(msg.path, msg.line);
           break;
         case "listSessions":
           this.handleListSessions();
@@ -186,14 +186,20 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
     resolve(approved);
   }
 
-  private async handleOpenFile(filePath: string): Promise<void> {
+  private async handleOpenFile(filePath: string, line?: number): Promise<void> {
     try {
       const root = vscode.workspace.workspaceFolders?.[0];
       if (!root) return;
       const fileUri = vscode.Uri.joinPath(root.uri, filePath);
       const doc = await vscode.workspace.openTextDocument(fileUri);
-      await vscode.window.showTextDocument(doc, { preview: true });
-      logInfo(`Opened file: ${filePath}`);
+      const editor = await vscode.window.showTextDocument(doc, { preview: true });
+
+      if (typeof line === "number" && line >= 1) {
+        const pos = new vscode.Position(line - 1, 0);
+        editor.selection = new vscode.Selection(pos, pos);
+        editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
+      }
+      logInfo(`Opened file: ${filePath}${line ? `:${line}` : ""}`);
     } catch (err) {
       logError(`Failed to open file: ${filePath}`, err);
       vscode.window.showWarningMessage(`Could not open ${filePath}`);

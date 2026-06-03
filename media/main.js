@@ -255,8 +255,9 @@
     var target = e.target;
     if (target.classList && target.classList.contains("file-link")) {
       var path = target.getAttribute("data-path");
+      var line = target.getAttribute("data-line");
       if (path) {
-        vscode.postMessage({ type: "openFile", path: path });
+        vscode.postMessage({ type: "openFile", path: path, line: line ? parseInt(line) : undefined });
       }
     }
   });
