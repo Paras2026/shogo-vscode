@@ -1,9 +1,8 @@
 import * as vscode from "vscode";
 import { streamChat, type ChatMessage, type StructuredToolCall } from "../shogoClient";
-import { logInfo as logInfoImport, logError, logDebug, logWarn } from "../logger";
+import { logInfo, logError, logDebug, logWarn } from "../logger";
 import { executeTool, getToolDescriptions, validateToolInput } from "./toolRegistry";
 import type { ApprovalRequest, ToolResult } from "./types";
-import { logInfo, logError, logWarn, logDebug } from "../logger";
 
 export interface AgentLoopOptions {
   apiKey: string;
@@ -43,29 +42,34 @@ function trimHistory(messages: ChatMessage[]): ChatMessage[] {
 
 
 function parseTextToolCalls(text: string): StructuredToolCall[] {
-  const trimmed = text.trim();
-  const start = trimmed.indexOf("{");
-  const end = trimmed.lastIndexOf("}");
-  if (start === -1 || end <= start) return [];
+  const results: StructuredToolCall[] = [];
+  const seen = new Set<string>();
 
-  try {
-    const parsed = JSON.parse(trimmed.slice(start, end + 1)) as Record<string, unknown>;
-    const toolName = typeof parsed.tool === "string" ? parsed.tool
-      : typeof parsed.name === "string" ? parsed.name
-      : undefined;
-    if (!toolName) return [];
+  const regex = /\{[^{}]*"tool"\s*:\s*"([^"]+)"[^{}]*\}/g;
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    try {
+      const parsed = JSON.parse(match[0]) as Record<string, unknown>;
+      const toolName = typeof parsed.tool === "string" ? parsed.tool : undefined;
+      if (!toolName) continue;
 
-    let input: Record<string, unknown> = {};
-    if (parsed.input && typeof parsed.input === "object" && !Array.isArray(parsed.input)) {
-      input = parsed.input as Record<string, unknown>;
-    } else if (parsed.arguments && typeof parsed.arguments === "object") {
-      input = parsed.arguments as Record<string, unknown>;
+      let input: Record<string, unknown> = {};
+      if (parsed.input && typeof parsed.input === "object" && !Array.isArray(parsed.input)) {
+        input = parsed.input as Record<string, unknown>;
+      } else if (parsed.arguments && typeof parsed.arguments === "object") {
+        input = parsed.arguments as Record<string, unknown>;
+      }
+
+      const key = `${toolName}:${JSON.stringify(input)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      results.push({ toolCallId: `text-${Date.now()}-${results.length}`, toolName, input });
+    } catch {
+      continue;
     }
-
-    return [{ toolCallId: `text-${Date.now()}`, toolName, input }];
-  } catch {
-    return [];
   }
+  return results;
 }
 
 export async function runAgentLoop(opts: AgentLoopOptions): Promise<string> {
