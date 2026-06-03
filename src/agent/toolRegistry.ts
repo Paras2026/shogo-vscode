@@ -4,6 +4,7 @@ import { applyPatchTool, writeFileTool } from "../tools/editTools";
 import { listFilesTool, readFileTool, searchWorkspaceTool } from "../tools/fileTools";
 import { runCommandTool } from "../tools/runCommand";
 import { codeIndexTool, dependencyGraphTool } from "../tools/codeIndexTools";
+import { logInfo, logError } from "../logger";
 
 const toolList: ToolDefinition[] = [
   listFilesTool,
@@ -105,8 +106,12 @@ export async function executeTool(
   }
 
   try {
-    return await tool.execute(input, ctx);
+    logInfo(`Tool executing: ${name}`);
+    const result = await tool.execute(input, ctx);
+    logInfo(`Tool ${name}: ${result.ok ? "ok" : "FAIL"}${result.error ? ` — ${result.error}` : ""}`);
+    return result;
   } catch (error: unknown) {
+    logError(`Tool ${name} threw`, error);
     return { ok: false, error: error instanceof Error ? error.message : "Unknown tool error" };
   }
 }

@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { streamChat, type ChatMessage, type StructuredToolCall } from "../shogoClient";
 import { executeTool, getToolDescriptions, validateToolInput } from "./toolRegistry";
 import type { ApprovalRequest, ToolResult } from "./types";
+import { logInfo, logError, logWarn, logDebug } from "../logger";
 
 export interface AgentLoopOptions {
   apiKey: string;
@@ -46,7 +47,10 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<string> {
   let consecutiveToolErrors = 0;
   let correctedFalseSuccess = false;
 
+  logInfo(`Agent loop starting: model=${opts.model}, history=${messages.length} msgs, system=${system.length} chars`);
+
   for (let step = 0; step < MAX_STEPS; step++) {
+    logDebug(`Step ${step + 1}/${MAX_STEPS}`);
     let responseText = "";
     let toolCalls: StructuredToolCall[] = [];
 
@@ -65,6 +69,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<string> {
     toolCalls = streamResult.toolCalls;
 
     if (toolCalls.length === 0) {
+      logDebug(`No tool calls. Response text: ${responseText.length} chars`);
       const cleanedText = stripToolMarkup(responseText);
 
       if (!correctedFalseSuccess && successfulToolCalls === 0 && looksLikeUnverifiedWorkspaceSuccess(cleanedText)) {
@@ -103,6 +108,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<string> {
         content: JSON.stringify({ type: "tool_call", tool: toolCall.toolName, input: toolCall.input }),
       });
 
+      logInfo(`Executing tool: ${toolCall.toolName}(${JSON.stringify(toolCall.input).slice(0, 200)})`);
       let result = await executeTool(toolCall.toolName, toolCall.input, {
         extensionContext: opts.extensionContext,
         signal: opts.signal,
@@ -169,6 +175,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<string> {
     }
   }
 
+  logInfo(`Agent loop ended after ${MAX_STEPS} steps. Successful tools: ${successfulToolCalls}`);
   const final = `I stopped after ${MAX_STEPS} steps to avoid looping. Ask me to continue if you want me to keep going.`;
   opts.onFinalToken?.(final);
   return final;

@@ -4,6 +4,7 @@ import { runAgentLoop } from "./agent/agentLoop";
 import type { ApprovalRequest } from "./agent/types";
 import { buildSystemPrompt, gatherSmartWorkspaceContext } from "./context";
 import type { ChatMessage } from "./shogoClient";
+import { logInfo, logError, logDebug, initLogger, showOutputChannel } from "./logger";
 
 export class ShogoViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "shogo.chatView";
@@ -13,10 +14,13 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
   private abortController?: AbortController;
   private pendingApprovals = new Map<string, (approved: boolean) => void>();
 
-  constructor(private readonly context: vscode.ExtensionContext) {}
+  constructor(private readonly context: vscode.ExtensionContext) {
+    initLogger();
+  }
 
   public resolveWebviewView(webviewView: vscode.WebviewView): void {
     this.view = webviewView;
+    logDebug("Webview view resolved");
 
     webviewView.webview.options = {
       enableScripts: true,
@@ -74,8 +78,11 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
+    logInfo(`User prompt: "${trimmed.slice(0, 100)}${trimmed.length > 100 ? "..." : ""}"`);
+
     const apiKey = await getApiKey(this.context);
     if (!apiKey) {
+      logError("No API key set");
       this.post({
         type: "error",
         text: "No API key set. Click 'Set API Key' to continue.",
@@ -118,8 +125,10 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
       });
       this.history.push({ role: "assistant", content: assistantText });
     } catch (err: unknown) {
+      logError("Agent loop failed", err);
       const message = this.describeError(err);
       this.post({ type: "error", text: message });
+      showOutputChannel();
     } finally {
       this.post({ type: "assistantEnd" });
       this.abortController = undefined;

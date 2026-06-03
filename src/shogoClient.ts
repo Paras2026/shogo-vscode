@@ -1,6 +1,7 @@
 import { createShogoLlmProvider } from "@shogo-ai/sdk";
 import { streamText, type ModelMessage } from "ai";
 import { TOOL_DEFINITIONS } from "./agent/toolDefinitions";
+import { logInfo, logError, logDebug, logWarn } from "./logger";
 
 export interface ChatMessage {
   role: "user" | "assistant";
@@ -35,6 +36,8 @@ export interface StreamOptions {
  * Falls back to text-based parsing if the gateway doesn't support tools.
  */
 export async function streamChat(opts: StreamOptions): Promise<StreamResult> {
+  logInfo(`streamChat: model=${opts.model}, messages=${opts.messages.length}, system=${opts.system.length} chars`);
+
   const provider = createShogoLlmProvider(
     opts.apiUrl
       ? { apiKey: opts.apiKey, baseUrl: opts.apiUrl }
@@ -47,13 +50,16 @@ export async function streamChat(opts: StreamOptions): Promise<StreamResult> {
   }));
 
   try {
-    const result = await streamWithNativeTools(provider, opts.model, coreMessages, opts);
-    return result;
+    logDebug("Attempting native tool_use stream...");
+    return await streamWithNativeTools(provider, opts.model, coreMessages, opts);
   } catch (nativeError: unknown) {
     const msg = nativeError instanceof Error ? nativeError.message : String(nativeError);
+    logWarn(`Native tool_use failed: ${msg}`);
     if (isToolNotSupportedError(msg)) {
+      logInfo("Falling back to text-based tool parsing");
       return streamWithTextFallback(provider, opts.model, coreMessages, opts);
     }
+    logError("Native tool_use error (not a tool-support issue)", nativeError);
     throw nativeError;
   }
 }
@@ -78,6 +84,8 @@ async function streamWithNativeTools(
     opts.onToken(delta);
   }
 
+  logDebug(`Native stream complete: ${full.length} chars text`);
+
   const nativeToolCalls = await result.toolCalls;
   const toolCalls: StructuredToolCall[] = (nativeToolCalls ?? []).map((tc) => ({
     toolCallId: tc.toolCallId,
@@ -85,6 +93,7 @@ async function streamWithNativeTools(
     input: (tc.input ?? {}) as Record<string, unknown>,
   }));
 
+  logInfo(`Native tool calls: ${toolCalls.length} — ${toolCalls.map((t) => t.toolName).join(", ") || "none"}`);
   return { text: full, toolCalls };
 }
 
@@ -107,7 +116,14 @@ async function streamWithTextFallback(
     opts.onToken(delta);
   }
 
+  logDebug(`Fallback stream complete: ${full.length} chars text`);
+
   const toolCalls = parseToolCallsFromText(full);
+  logInfo(`Parsed tool calls from text: ${toolCalls.length} — ${toolCalls.map((t) => t.toolName).join(", ") || "none"}`);
+  if (full.length === 0) {
+    logWarn("Stream returned EMPTY text — the model produced no output");
+  }
+
   return { text: full, toolCalls };
 }
 
