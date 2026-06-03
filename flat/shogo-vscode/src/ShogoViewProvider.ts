@@ -2,16 +2,26 @@ import * as vscode from "vscode";
 import { getApiKey, setApiKey } from "./auth";
 import { runAgentLoop } from "./agent/agentLoop";
 import { buildConfigInstructions, loadAgentConfig } from "./agent/config";
-import { SessionStore } from "./agent/sessionStore";
+import { SessionStore, type SessionSummary } from "./agent/sessionStore";
 import type { ApprovalRequest } from "./agent/types";
 import { buildSystemPrompt, gatherContext } from "./context";
 import type { ChatMessage } from "./shogoClient";
+
+const AVAILABLE_MODELS = [
+  "claude-sonnet-4-5",
+  "claude-haiku-4-5-20251001",
+  "claude-sonnet-4-6",
+  "claude-opus-4-6",
+  "gpt-4o",
+  "gpt-4o-mini",
+];
 
 export class ShogoViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "shogo.chatView";
 
   private view?: vscode.WebviewView;
   private history: ChatMessage[] = [];
+  private currentTitle?: string;
   private readonly sessionStore: SessionStore;
   private abortController?: AbortController;
   private pendingApprovals = new Map<string, (approved: boolean) => void>();
@@ -36,9 +46,11 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
       switch (msg.type) {
         case "ready":
           await this.refreshAuthState();
+          this.post({ type: "models", models: AVAILABLE_MODELS });
+          await this.sendSessionList();
           break;
         case "prompt":
-          await this.handlePrompt(msg.text);
+          await this.handlePrompt(msg.text, msg.model);
           break;
         case "setKey":
           await this.handleSetKey();
@@ -50,6 +62,27 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
         case "approvalResponse":
           this.handleApprovalResponse(msg.id, !!msg.approved);
           break;
+        case "approveAll":
+          this.resolveAllApprovals(true);
+          break;
+        case "rejectAll":
+          this.resolveAllApprovals(false);
+          break;
+        case "newChat":
+          this.newChat();
+          break;
+        case "listSessions":
+          await this.sendSessionList();
+          break;
+        case "loadSession":
+          await this.handleLoadSession(msg.sessionId);
+          break;
+        case "exportChat":
+          await this.handleExportChat();
+          break;
+        case "openFile":
+          await this.handleOpenFile(msg.path);
+          break;
       }
     });
   }
@@ -58,6 +91,7 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
     this.abortController?.abort();
     this.rejectAllApprovals();
     this.history = [];
+    this.currentTitle = undefined;
     this.sessionStore.reset();
     this.post({ type: "clear" });
   }
@@ -74,7 +108,7 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async handlePrompt(text: string): Promise<void> {
+  private async handlePrompt(text: string, modelOverride?: string): Promise<void> {
     const trimmed = (text ?? "").trim();
     if (!trimmed) {
       return;
@@ -91,18 +125,25 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
     }
 
     const config = vscode.workspace.getConfiguration("shogo");
-    const model = config.get<string>("model", "claude-sonnet-4-5");
+    const model = modelOverride || config.get<string>("model", "claude-sonnet-4-5");
     const includeFile = config.get<boolean>("includeActiveFile", true);
     const apiUrl = config.get<string>("apiUrl", "");
     const agentConfig = await loadAgentConfig();
 
     const ctx = includeFile ? gatherContext() : { workspaceName: undefined };
     ctx.extraInstructions = buildConfigInstructions(agentConfig);
+
+    const resolved = await this.resolveMentions(trimmed);
     const system = buildSystemPrompt(ctx);
 
-    this.history.push({ role: "user", content: trimmed });
+    this.history.push({ role: "user", content: resolved });
     this.post({ type: "userMessage", text: trimmed });
     this.post({ type: "assistantStart" });
+
+    if (!this.currentTitle) {
+      this.currentTitle = trimmed.slice(0, 60).replace(/\n/g, " ");
+      this.post({ type: "chatTitle", title: this.currentTitle });
+    }
 
     this.abortController = new AbortController();
     let assistantText = "";
@@ -123,16 +164,86 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
         onFinalToken: (chunk) => {
           this.post({ type: "assistantToken", text: chunk });
         },
+        onTokenUsage: (usage) => {
+          this.post({ type: "tokenUsage", usage });
+        },
         requestApproval: (request) => this.requestApproval(request),
       });
       this.history.push({ role: "assistant", content: assistantText });
-      await this.sessionStore.save(this.history);
+      await this.sessionStore.save(this.history, this.currentTitle);
     } catch (err: unknown) {
       const message = this.describeError(err);
       this.post({ type: "error", text: message });
     } finally {
       this.post({ type: "assistantEnd" });
       this.abortController = undefined;
+    }
+  }
+
+  private async resolveMentions(text: string): Promise<string> {
+    const mentionRegex = /@([^\s@]+)/g;
+    let resolved = text;
+    let match: RegExpExecArray | null;
+
+    while ((match = mentionRegex.exec(text)) !== null) {
+      const filePath = match[1];
+      try {
+        const { normalizeRelativePath, resolveWorkspacePath } = await import("./tools/workspace");
+        const rel = normalizeRelativePath(filePath);
+        const uri = resolveWorkspacePath(rel);
+        const bytes = await vscode.workspace.fs.readFile(uri);
+        const content = Buffer.from(bytes).toString("utf8");
+        resolved = resolved.replace(match[0], `@${filePath}:\n\`\`\`\n${content}\n\`\`\``);
+      } catch {
+        resolved = resolved.replace(match[0], `@${filePath}: [file not found]`);
+      }
+    }
+
+    return resolved;
+  }
+
+  private async sendSessionList(): Promise<void> {
+    const sessions = await this.sessionStore.listSessions();
+    this.post({ type: "sessionList", sessions });
+  }
+
+  private async handleLoadSession(sessionId: string): Promise<void> {
+    try {
+      const messages = await this.sessionStore.loadSession(sessionId);
+      this.history = [...messages];
+      this.currentTitle = messages.find((m) => m.role === "user")?.content.slice(0, 60);
+      this.post({ type: "loadHistory", messages, title: this.currentTitle });
+    } catch (err) {
+      this.post({ type: "error", text: `Failed to load session: ${err instanceof Error ? err.message : "unknown"}` });
+    }
+  }
+
+  private async handleExportChat(): Promise<void> {
+    const content = this.history.map((m) => {
+      const role = m.role === "user" ? "## You" : "## Shogo";
+      return `${role}\n\n${m.content}`;
+    }).join("\n\n---\n\n");
+
+    const md = `# Shogo Chat\n\n${content}`;
+    const uri = await vscode.window.showSaveDialog({
+      defaultUri: vscode.Uri.file("shogo-chat.md"),
+      filters: { Markdown: ["md"] },
+    });
+    if (uri) {
+      await vscode.workspace.fs.writeFile(uri, Buffer.from(md, "utf8"));
+      vscode.window.showInformationMessage("Chat exported!");
+    }
+  }
+
+  private async handleOpenFile(filePath: string): Promise<void> {
+    try {
+      const { normalizeRelativePath, resolveWorkspacePath } = await import("./tools/workspace");
+      const rel = normalizeRelativePath(filePath);
+      const uri = resolveWorkspacePath(rel);
+      const doc = await vscode.workspace.openTextDocument(uri);
+      await vscode.window.showTextDocument(doc);
+    } catch {
+      vscode.window.showWarningMessage(`File not found: ${filePath}`);
     }
   }
 
@@ -148,15 +259,19 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
   }
 
   private handleApprovalResponse(id: unknown, approved: boolean): void {
-    if (typeof id !== "string") {
-      return;
-    }
+    if (typeof id !== "string") return;
     const resolve = this.pendingApprovals.get(id);
-    if (!resolve) {
-      return;
-    }
+    if (!resolve) return;
     this.pendingApprovals.delete(id);
     resolve(approved);
+  }
+
+  private resolveAllApprovals(approved: boolean): void {
+    for (const [id, resolve] of this.pendingApprovals) {
+      resolve(approved);
+      this.post({ type: "approvalResponse", id, approved });
+    }
+    this.pendingApprovals.clear();
   }
 
   private rejectAllApprovals(): void {
@@ -168,16 +283,10 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
 
   private describeError(err: unknown): string {
     if (err instanceof Error) {
-      if (err.name === "AbortError") {
-        return "Generation stopped.";
-      }
+      if (err.name === "AbortError") return "Generation stopped.";
       const m = err.message || "";
-      if (m.includes("401") || /unauthor/i.test(m)) {
-        return "Authentication failed (401). Check your Shogo API key.";
-      }
-      if (m.includes("429")) {
-        return "Rate limited (429). Please wait and try again.";
-      }
+      if (m.includes("401") || /unauthor/i.test(m)) return "Authentication failed (401). Check your Shogo API key.";
+      if (m.includes("429")) return "Rate limited (429). Please wait and try again.";
       return `Error: ${m}`;
     }
     return "An unknown error occurred.";
@@ -227,10 +336,22 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
     <p>Set your Shogo Cloud API key to start chatting.</p>
     <button id="set-key-btn">Set API Key</button>
   </div>
+  <div id="session-panel" class="hidden">
+    <div id="session-header">
+      <span id="session-title-display"></span>
+      <div id="session-actions">
+        <button id="history-btn" title="History">☰</button>
+        <button id="export-btn" title="Export">↗</button>
+        <button id="clear-btn" title="New Chat">✕</button>
+      </div>
+    </div>
+  </div>
+  <div id="session-list" class="hidden"></div>
   <div id="messages"></div>
   <div id="composer">
-    <textarea id="input" rows="2" placeholder="Ask Shogo... (Enter to send, Shift+Enter for newline)"></textarea>
+    <textarea id="input" rows="2" placeholder="Ask Shogo... (Enter to send)"></textarea>
     <div class="composer-actions">
+      <select id="model-select" title="Model"></select>
       <button id="send-btn" title="Send">Send</button>
       <button id="stop-btn" class="hidden" title="Stop">Stop</button>
     </div>
@@ -243,8 +364,7 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
 
 function getNonce(): string {
   let text = "";
-  const possible =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  const possible = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
   for (let i = 0; i < 32; i++) {
     text += possible.charAt(Math.floor(Math.random() * possible.length));
   }

@@ -1,7 +1,10 @@
 import * as vscode from "vscode";
 import { streamChat, type ChatMessage } from "../shogoClient";
+import { ToolCache } from "./toolCache";
 import { executeTool, getToolDescriptions, getToolNames } from "./toolRegistry";
 import type { ApprovalRequest, ParsedToolCall, ToolResult } from "./types";
+
+const CACHEABLE_TOOLS = new Set(["readFile", "listFiles", "searchWorkspace", "searchIndex", "gitStatus", "gitDiff"]);
 
 export interface AgentLoopOptions {
   apiKey: string;
@@ -14,6 +17,7 @@ export interface AgentLoopOptions {
   signal?: AbortSignal;
   onActivity?: (text: string) => void;
   onFinalToken?: (text: string) => void;
+  onTokenUsage?: (usage: { inputTokens: number; outputTokens: number }) => void;
   requestApproval?: (request: ApprovalRequest) => Promise<boolean>;
 }
 
@@ -45,6 +49,9 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<string> {
   const maxSteps = Math.min(Math.max(opts.maxSteps ?? DEFAULT_MAX_STEPS, 1), 32);
   let successfulToolCalls = 0;
   let correctedFalseSuccess = false;
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  const cache = new ToolCache();
 
   for (let step = 0; step < maxSteps; step++) {
     let response = "";
@@ -74,6 +81,11 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<string> {
         continue;
       }
 
+      const inputTokens = estimateTokens(system) + estimateTokens(JSON.stringify(messages));
+      const outputTokens = estimateTokens(finalResponse);
+      totalInputTokens += inputTokens;
+      totalOutputTokens += outputTokens;
+      opts.onTokenUsage?.({ inputTokens: totalInputTokens, outputTokens: totalOutputTokens });
       opts.onFinalToken?.(finalResponse);
       return finalResponse;
     }
@@ -81,12 +93,29 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<string> {
     opts.onActivity?.(`Tool: ${toolCall.tool}`);
     messages.push({ role: "assistant", content: formatToolCallForHistory(toolCall) });
 
-    const result = await executeTool(toolCall.tool, toolCall.input, {
-      extensionContext: opts.extensionContext,
-      signal: opts.signal,
-      postActivity: opts.onActivity,
-      requestApproval: opts.requestApproval,
-    });
+    let result: ToolResult;
+    if (CACHEABLE_TOOLS.has(toolCall.tool)) {
+      const cached = cache.get(toolCall.tool, toolCall.input);
+      if (cached) {
+        result = cached;
+        opts.onActivity?.(`${toolCall.tool}: cached`);
+      } else {
+        result = await executeTool(toolCall.tool, toolCall.input, {
+          extensionContext: opts.extensionContext,
+          signal: opts.signal,
+          postActivity: opts.onActivity,
+          requestApproval: opts.requestApproval,
+        });
+        if (result.ok) cache.set(toolCall.tool, toolCall.input, result);
+      }
+    } else {
+      result = await executeTool(toolCall.tool, toolCall.input, {
+        extensionContext: opts.extensionContext,
+        signal: opts.signal,
+        postActivity: opts.onActivity,
+        requestApproval: opts.requestApproval,
+      });
+    }
 
     if (result.ok) {
       successfulToolCalls += 1;

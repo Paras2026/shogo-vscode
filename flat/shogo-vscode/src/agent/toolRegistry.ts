@@ -4,6 +4,7 @@ import { applyPatchTool, writeFileTool } from "../tools/editTools";
 import { listFilesTool, readFileTool, searchWorkspaceTool } from "../tools/fileTools";
 import { gitDiffTool, gitStatusTool } from "../tools/gitTools";
 import { indexWorkspaceTool, searchIndexTool } from "../tools/indexTools";
+import { multiEditTool } from "../tools/multiEditTool";
 import { runCommandTool } from "../tools/runCommand";
 
 const toolList: ToolDefinition[] = [
@@ -17,6 +18,7 @@ const toolList: ToolDefinition[] = [
   getDiagnosticsTool,
   applyPatchTool,
   writeFileTool,
+  multiEditTool,
   runCommandTool,
 ];
 
