@@ -82,7 +82,9 @@
     var text = src.replace(/```(\w*)\n?([\s\S]*?)```/g, function (_m, lang, code) {
       var idx = codeBlocks.length;
       var langLabel = lang || "";
-      var escapedCode = escapeHtml(code.replace(/\n$/, ""));
+      var normalized = code.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+      normalized = normalized.replace(/^\n/, "").replace(/\n$/, "");
+      var escapedCode = escapeHtml(normalized);
       codeBlocks.push(
         '<div class="code-block-wrapper">' +
           '<div class="code-block-header"><span>' + escapeHtml(langLabel) + '</span><button class="copy-btn" onclick="window._copyCode(' + idx + ')">Copy</button></div>' +

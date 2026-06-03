@@ -346,12 +346,18 @@ body {
   overflow-x: auto;
   margin: 6px 0;
   border: 1px solid rgba(127,127,127,0.1);
+  white-space: pre !important;
 }
 .bubble code {
   font-family: var(--vscode-editor-font-family, monospace);
   font-size: 12px;
 }
-.bubble pre code { white-space: pre; }
+.bubble pre code {
+  white-space: pre !important;
+  display: block;
+  overflow-x: auto;
+  word-wrap: normal;
+}
 .bubble :not(pre) > code {
   background: rgba(127,127,127,0.15);
   padding: 1px 5px;
