@@ -4,6 +4,33 @@ import * as vscode from "vscode";
 import type { ToolDefinition, ToolExecutionContext, ToolResult } from "../agent/types";
 import { normalizeRelativePath, resolveAbsolutePath, truncateText } from "./workspace";
 
+// ── Edit Undo Store (Feature f2) ──
+interface UndoEntry {
+  filePath: string;
+  absPath: string;
+  previousContent: string;
+  timestamp: number;
+}
+const undoStack: UndoEntry[] = [];
+const MAX_UNDO = 20;
+
+function pushUndo(filePath: string, absPath: string, previousContent: string): void {
+  undoStack.unshift({ filePath, absPath, previousContent, timestamp: Date.now() });
+  if (undoStack.length > MAX_UNDO) undoStack.pop();
+}
+
+export function getUndoStack(): UndoEntry[] {
+  return undoStack.slice(0, 10);
+}
+
+// ── Line Ending Normalization (from user's plan) ──
+function normalizeLineEndings(content: string, targetFileContent: string): string {
+  const isCrlf = targetFileContent.includes("\r\n");
+  let clean = content.replace(/\r\n/g, "\n");
+  if (isCrlf) return clean.replace(/\n/g, "\r\n");
+  return clean;
+}
+
 /**
  * Unified Diff Editing — SEARCH/REPLACE blocks.
  * The LLM outputs blocks like:
@@ -12,9 +39,6 @@ import { normalizeRelativePath, resolveAbsolutePath, truncateText } from "./work
  *   =======
  *   new replacement code
  *   >>>>>>> REPLACE
- *
- * Multiple blocks can appear in one call. Each block is applied sequentially.
- * This is the same format used by Aider, Cursor, and Windsurf.
  */
 export const applyPatchTool: ToolDefinition = {
   name: "applyPatch",
@@ -66,21 +90,35 @@ export const applyPatchTool: ToolDefinition = {
 
     for (let i = 0; i < blocks.length; i++) {
       const block = blocks[i];
-      const idx = modified.indexOf(block.search);
+      // Normalize line endings for search
+      const normalizedSearch = normalizeLineEndings(block.search, current);
+      const normalizedReplace = normalizeLineEndings(block.replace, current);
+      const idx = modified.indexOf(normalizedSearch);
 
       if (idx === -1) {
-        failedBlocks.push(`Block ${i + 1}: SEARCH text not found in file`);
+        // Try with original (might already match)
+        const origIdx = modified.indexOf(block.search);
+        if (origIdx === -1) {
+          failedBlocks.push(`Block ${i + 1}: SEARCH text not found in file`);
+          continue;
+        }
+        const secondIdx = modified.indexOf(block.search, origIdx + block.search.length);
+        if (secondIdx !== -1) {
+          failedBlocks.push(`Block ${i + 1}: SEARCH text is not unique (${countOccurrences(modified, block.search)} matches). Add more context.`);
+          continue;
+        }
+        modified = modified.slice(0, origIdx) + normalizedReplace + modified.slice(origIdx + block.search.length);
+        appliedBlocks.push(`Block ${i + 1}: applied`);
         continue;
       }
 
-      // Check uniqueness (warn but allow if multiple matches)
-      const secondIdx = modified.indexOf(block.search, idx + block.search.length);
+      const secondIdx = modified.indexOf(normalizedSearch, idx + normalizedSearch.length);
       if (secondIdx !== -1) {
-        failedBlocks.push(`Block ${i + 1}: SEARCH text is not unique (${countOccurrences(modified, block.search)} matches). Add more context.`);
+        failedBlocks.push(`Block ${i + 1}: SEARCH text is not unique (${countOccurrences(modified, normalizedSearch)} matches). Add more context.`);
         continue;
       }
 
-      modified = modified.slice(0, idx) + block.replace + modified.slice(idx + block.search.length);
+      modified = modified.slice(0, idx) + normalizedReplace + modified.slice(idx + normalizedSearch.length);
       appliedBlocks.push(`Block ${i + 1}: applied`);
     }
 
@@ -94,6 +132,11 @@ export const applyPatchTool: ToolDefinition = {
       if (!approved) {
         return { ok: false, error: "User rejected the edit." };
       }
+    }
+
+    // Store undo entry before writing
+    if (exists) {
+      pushUndo(rel, absPath, current);
     }
 
     // Write the file
@@ -233,4 +276,77 @@ async function showDiffApproval(
 
 export function summarizeToolData(data: unknown): string {
   return truncateText(JSON.stringify(data, null, 2), 4000);
+}
+
+// ── Undo Edit Tool ──
+export const undoEditTool: ToolDefinition = {
+  name: "undoEdit",
+  description: "Undo the last file edit. Restores the file to its state before the most recent applyPatch or writeFile. Only works for edits made in this session.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      path: { type: "string", description: "Optional: undo a specific file. If omitted, undoes the most recent edit." },
+    },
+  },
+  async execute(input): Promise<ToolResult> {
+    if (undoStack.length === 0) {
+      return { ok: false, error: "No edits to undo." };
+    }
+
+    const targetPath = typeof input.path === "string" ? normalizeRelativePath(input.path) : undefined;
+    let entry: UndoEntry | undefined;
+
+    if (targetPath) {
+      entry = undoStack.find((e) => e.filePath === targetPath);
+    } else {
+      entry = undoStack[0];
+    }
+
+    if (!entry) return { ok: false, error: `No undo entry found for ${targetPath || "most recent edit"}` };
+
+    try {
+      await fs.promises.writeFile(entry.absPath, entry.previousContent, "utf-8");
+      // Remove from stack
+      const idx = undoStack.indexOf(entry);
+      if (idx >= 0) undoStack.splice(idx, 1);
+      return { ok: true, data: { path: entry.filePath, restored: true, undoCount: undoStack.length } };
+    } catch (err) {
+      return { ok: false, error: `Failed to undo: ${err instanceof Error ? err.message : "Unknown error"}` };
+    }
+  },
+};
+
+// ── Smart File Suggestions (Feature f3) ──
+export function suggestRelatedFiles(content: string, currentPath: string): string[] {
+  const suggestions: string[] = [];
+  const dir = currentPath.split("/").slice(0, -1).join("/");
+
+  // Extract import paths
+  const importRegex = /(?:import|from|require)\s*\(?['"]([^'"]+)['"]/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = importRegex.exec(content)) !== null) {
+    const importPath = match[1];
+    if (importPath.startsWith(".") && !importPath.endsWith(".css") && !importPath.endsWith(".scss")) {
+      // Resolve relative import
+      const resolved = resolveImportPath(importPath, dir);
+      if (resolved && !suggestions.includes(resolved)) {
+        suggestions.push(resolved);
+      }
+    }
+  }
+
+  return suggestions.slice(0, 5);
+}
+
+function resolveImportPath(importPath: string, fromDir: string): string | null {
+  const parts = [...fromDir.split("/"), ...importPath.split("/")];
+  const resolved: string[] = [];
+  for (const part of parts) {
+    if (part === "..") resolved.pop();
+    else if (part !== "." && part !== "") resolved.push(part);
+  }
+  // Try common extensions
+  const base = resolved.join("/");
+  return base;
 }

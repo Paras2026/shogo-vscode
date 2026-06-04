@@ -109,11 +109,11 @@ export function buildSystemPrompt(ctx: WorkspaceContext): string {
     parts.push(`The user's workspace is named "${ctx.workspaceName}".`);
   }
 
-  if (ctx.smartContext) {
   if (ctx.environment) {
     parts.push(formatEnvironmentForPrompt(ctx.environment));
   }
 
+  if (ctx.smartContext) {
     const sc = ctx.smartContext;
 
     if (sc.projectTree) {

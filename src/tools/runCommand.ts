@@ -7,10 +7,8 @@ import { getWorkspaceRoot, getWorkspaceRootPath, truncateText } from "./workspac
 
 const MAX_OUTPUT_CHARS = 60000;
 const DEFAULT_TIMEOUT_MS = 120000;
-const MAX_CONSECUTIVE_ERRORS = 5;
 let outputChannel: vscode.OutputChannel | undefined;
 
-// ── Headless environment flags ──
 const HEADLESS_ENV: Record<string, string> = {
   CI: "true",
   DEBIAN_FRONTEND: "noninteractive",
@@ -23,23 +21,26 @@ const HEADLESS_ENV: Record<string, string> = {
   YARN_ENABLE_IMMUTABLE_INSTALLS: "false",
 };
 
-function getDefaultShell(): string {
-  const platform = os.platform();
-  if (platform === "win32") {
-    const comspec = process.env.COMSPEC;
-    if (comspec) return comspec;
-    const candidates = [
-      "powershell.exe", "pwsh.exe",
-      process.env.SYSTEMROOT ? `${process.env.SYSTEMROOT}\\System32\\cmd.exe` : null,
-      "cmd.exe",
-    ].filter(Boolean) as string[];
-    for (const c of candidates) {
-      try { require("fs").accessSync(c); return c; } catch { continue; }
-    }
-    return "cmd.exe";
-  }
-  if (platform === "darwin") return process.env.SHELL || "/bin/zsh";
-  return process.env.SHELL || "/bin/sh";
+// ── Command History (Feature: f1) ──
+interface HistoryEntry {
+  timestamp: number;
+  command: string;
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  durationMs: number;
+}
+
+const commandHistory: HistoryEntry[] = [];
+const MAX_HISTORY = 50;
+
+function addToHistory(entry: HistoryEntry): void {
+  commandHistory.unshift(entry);
+  if (commandHistory.length > MAX_HISTORY) commandHistory.pop();
+}
+
+export function getCommandHistory(count?: number): HistoryEntry[] {
+  return commandHistory.slice(0, count ?? 20);
 }
 
 function getOutputChannel(): vscode.OutputChannel {
@@ -47,16 +48,73 @@ function getOutputChannel(): vscode.OutputChannel {
   return outputChannel;
 }
 
-// ── Persistent Shell ──
+// ── Two-Strategy Shell ──
+// Windows: Individual spawns with PowerShell try/finally markers
+// Linux/Mac: Persistent shell for state preservation
+
+function isWindows(): boolean {
+  return os.platform() === "win32";
+}
+
+// Windows: spawn individual commands with PowerShell try/finally
+async function executeWindows(
+  command: string,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<{ stdout: string; stderr: string; code: number }> {
+  const marker = `__SHOGO_DONE_${Date.now()}__`;
+  const wrappedCmd = `try { ${command} } finally { Write-Output "${marker}" }`;
+
+  const shell = process.env.COMSPEC || "powershell.exe";
+  const args = ["-NoProfile", "-NonInteractive", "-Command", wrappedCmd];
+  const cwd = getWorkspaceRootPath() || process.cwd();
+  const env = { ...process.env, ...HEADLESS_ENV };
+
+  return new Promise((resolve) => {
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+
+    const proc = spawn(shell, args, {
+      cwd,
+      env,
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+    });
+
+    const finish = (code: number) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      resolve({ stdout: stdout.trim(), stderr: stderr.trim(), code });
+    };
+
+    const timer = setTimeout(() => { try { proc.kill(); } catch {} finish(-1); }, timeoutMs);
+    const onAbort = () => { try { proc.kill(); } catch {} finish(-1); };
+    signal?.addEventListener("abort", onAbort);
+
+    proc.stdout?.on("data", (d: Buffer) => {
+      stdout += d.toString("utf8");
+      if (stdout.length > MAX_OUTPUT_CHARS) stdout = stdout.slice(-MAX_OUTPUT_CHARS);
+    });
+    proc.stderr?.on("data", (d: Buffer) => {
+      stderr += d.toString("utf8");
+      if (stderr.length > MAX_OUTPUT_CHARS) stderr = stderr.slice(-MAX_OUTPUT_CHARS);
+    });
+    proc.on("close", (code) => { finish(code ?? -1); });
+    proc.on("error", () => { finish(-1); });
+  });
+}
+
+// Linux/Mac: Persistent shell for state preservation
 class PersistentShell {
   private process: ChildProcess | null = null;
   private cwd: string;
   private consecutiveErrors = 0;
   private commandId = 0;
 
-  constructor(cwd: string) {
-    this.cwd = cwd;
-  }
+  constructor(cwd: string) { this.cwd = cwd; }
 
   isAlive(): boolean {
     return this.process !== null && this.process.exitCode === null;
@@ -64,40 +122,33 @@ class PersistentShell {
 
   start(): void {
     this.stop();
-    const shell = getDefaultShell();
-    const isWin = os.platform() === "win32";
+    const shell = process.env.SHELL || "/bin/sh";
     const env = { ...process.env, ...HEADLESS_ENV };
-
-    this.process = isWin
-      ? spawn(shell, [], { cwd: this.cwd, env, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] })
-      : spawn(shell, [], { cwd: this.cwd, env, stdio: ["pipe", "pipe", "pipe"] });
-
+    this.process = spawn(shell, [], {
+      cwd: this.cwd,
+      env,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
     this.process.on("error", () => { this.consecutiveErrors++; });
     this.process.on("exit", () => { this.process = null; });
   }
 
   stop(): void {
-    if (this.process) {
-      try { this.process.kill(); } catch {}
-      this.process = null;
-    }
+    if (this.process) { try { this.process.kill(); } catch {} this.process = null; }
   }
 
-  reset(): void {
-    this.stop();
-    this.consecutiveErrors = 0;
-    this.start();
-  }
+  reset(): void { this.stop(); this.consecutiveErrors = 0; this.start(); }
 
-  async execute(command: string, timeoutMs: number, signal?: AbortSignal): Promise<{ stdout: string; stderr: string; code: number }> {
-    if (!this.isAlive() || this.consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-      this.reset();
-    }
+  async execute(
+    command: string,
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ): Promise<{ stdout: string; stderr: string; code: number }> {
+    if (!this.isAlive() || this.consecutiveErrors >= 5) this.reset();
 
     return new Promise((resolve) => {
       const marker = `__SHOGO_DONE_${++this.commandId}__`;
-      const isWin = os.platform() === "win32";
-      const wrappedCmd = isWin ? `${command} & echo ${marker}` : `${command}; echo $?; echo ${marker}`;
+      const wrappedCmd = `${command}; __exit=$?; echo $__exit; echo ${marker}`;
 
       let stdout = "";
       let stderr = "";
@@ -116,62 +167,42 @@ class PersistentShell {
         this.consecutiveErrors++;
         finish(-1);
       }, timeoutMs);
-
-      const onAbort = () => {
-        this.process?.kill();
-        finish(-1);
-      };
+      const onAbort = () => { this.process?.kill(); finish(-1); };
       signal?.addEventListener("abort", onAbort);
 
       const onData = (chunk: Buffer) => {
         const text = chunk.toString("utf8");
-        if (stdout.includes(marker)) return;
         stdout += text;
-        if (stdout.length > MAX_OUTPUT_CHARS) {
-          stdout = stdout.slice(-MAX_OUTPUT_CHARS);
-        }
+        if (stdout.length > MAX_OUTPUT_CHARS) stdout = stdout.slice(-MAX_OUTPUT_CHARS);
       };
-
       const onErrData = (chunk: Buffer) => {
         stderr += chunk.toString("utf8");
-        if (stderr.length > MAX_OUTPUT_CHARS) {
-          stderr = stderr.slice(-MAX_OUTPUT_CHARS);
-        }
+        if (stderr.length > MAX_OUTPUT_CHARS) stderr = stderr.slice(-MAX_OUTPUT_CHARS);
       };
 
       this.process!.stdout?.on("data", onData);
       this.process!.stderr?.on("data", onErrData);
-
       this.process!.stdin?.write(wrappedCmd + "\n");
 
-      // Watch for marker in stdout
       const checkInterval = setInterval(() => {
         if (stdout.includes(marker)) {
           clearInterval(checkInterval);
           this.process!.stdout?.removeListener("data", onData);
           this.process!.stderr?.removeListener("data", onErrData);
 
-          // Extract exit code if available
           const markerIdx = stdout.indexOf(marker);
           const beforeMarker = stdout.slice(0, markerIdx);
           const lines = beforeMarker.split("\n");
           let exitCode = 0;
-
-          // On Unix, we echo $? before the marker
-          if (!isWin && lines.length >= 2) {
+          if (lines.length >= 2) {
             const possibleCode = parseInt(lines[lines.length - 2].trim(), 10);
-            if (!isNaN(possibleCode)) {
-              exitCode = possibleCode;
-              lines.splice(lines.length - 2, 1);
-            }
+            if (!isNaN(possibleCode)) { exitCode = possibleCode; lines.splice(lines.length - 2, 1); }
           }
-
           stdout = lines.join("\n").trim();
           finish(exitCode);
         }
       }, 50);
 
-      // Safety timeout for the interval
       setTimeout(() => {
         clearInterval(checkInterval);
         if (!settled) {
@@ -182,13 +213,8 @@ class PersistentShell {
       }, timeoutMs + 1000);
     });
   }
-
-  updateCwd(newCwd: string): void {
-    this.cwd = newCwd;
-  }
 }
 
-// Global persistent shell instance
 let globalShell: PersistentShell | null = null;
 
 function getShell(): PersistentShell {
@@ -200,9 +226,10 @@ function getShell(): PersistentShell {
   return globalShell;
 }
 
+// ── Main Tool ──
 export const runCommandTool: ToolDefinition = {
   name: "runCommand",
-  description: "Run a shell command in the workspace. Commands share state (cd persists between calls).",
+  description: "Run a shell command. On Windows uses PowerShell; on Linux/Mac uses persistent shell (cd persists).",
   inputSchema: {
     type: "object",
     required: ["command"],
@@ -212,24 +239,15 @@ export const runCommandTool: ToolDefinition = {
     },
   },
   async execute(input, ctx): Promise<ToolResult> {
-    if (typeof input.command !== "string") {
-      return { ok: false, error: "command must be a string" };
-    }
+    if (typeof input.command !== "string") return { ok: false, error: "command must be a string" };
 
     const command = input.command.trim();
     const decision = classifyCommand(command);
-    if (decision.action === "block") {
-      return { ok: false, error: `Blocked command: ${decision.reason}` };
-    }
+    if (decision.action === "block") return { ok: false, error: `Blocked command: ${decision.reason}` };
 
     const root = getWorkspaceRoot();
-    if (!root) {
-      return { ok: false, error: "No workspace folder is open." };
-    }
-
-    if (!ctx.requestApproval) {
-      return { ok: false, error: "Approval UI is unavailable, so the command was not run." };
-    }
+    if (!root) return { ok: false, error: "No workspace folder is open." };
+    if (!ctx.requestApproval) return { ok: false, error: "Approval UI is unavailable." };
 
     const approved = await ctx.requestApproval({
       id: `command-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -238,15 +256,9 @@ export const runCommandTool: ToolDefinition = {
       description: command,
       primaryAction: "Run Command",
       secondaryAction: "Cancel",
-      details: {
-        cwd: root.uri.fsPath,
-        reason: decision.reason,
-        policy: decision.action,
-      },
+      details: { cwd: root.uri.fsPath, reason: decision.reason, policy: decision.action },
     });
-    if (!approved) {
-      return { ok: false, error: "User cancelled command." };
-    }
+    if (!approved) return { ok: false, error: "User cancelled command." };
 
     const timeoutMs = typeof input.timeoutMs === "number"
       ? Math.min(Math.max(input.timeoutMs, 1000), 300000)
@@ -257,15 +269,32 @@ export const runCommandTool: ToolDefinition = {
     channel.appendLine(`\n$ ${command}`);
     channel.show(true);
 
-    const shell = getShell();
-    const result = await shell.execute(command, timeoutMs, ctx.signal);
+    const startTime = Date.now();
+    let result: { stdout: string; stderr: string; code: number };
+
+    if (isWindows()) {
+      result = await executeWindows(command, timeoutMs, ctx.signal);
+    } else {
+      const shell = getShell();
+      result = await shell.execute(command, timeoutMs, ctx.signal);
+    }
+
+    const durationMs = Date.now() - startTime;
+
+    // Record in command history
+    addToHistory({
+      timestamp: Date.now(),
+      command,
+      exitCode: result.code,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      durationMs,
+    });
 
     const stdoutTruncated = truncateText(result.stdout, MAX_OUTPUT_CHARS);
     const stderrTruncated = truncateText(result.stderr, MAX_OUTPUT_CHARS);
 
-    if (result.stderr) {
-      channel.append(result.stderr);
-    }
+    if (result.stderr) channel.append(result.stderr);
     channel.appendLine(stdoutTruncated);
 
     const data = {
@@ -273,12 +302,11 @@ export const runCommandTool: ToolDefinition = {
       exitCode: result.code,
       stdout: stdoutTruncated,
       stderr: stderrTruncated,
+      durationMs,
+      platform: isWindows() ? "windows" : "unix",
     };
 
-    if (result.code === 0) {
-      return { ok: true, data };
-    } else {
-      return { ok: false, error: `Command exited with code ${result.code}.`, data };
-    }
+    if (result.code === 0) return { ok: true, data };
+    else return { ok: false, error: `Command exited with code ${result.code}.`, data };
   },
 };

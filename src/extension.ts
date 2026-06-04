@@ -2,11 +2,17 @@ import * as vscode from "vscode";
 import * as fs from "fs";
 import { clearApiKey, setApiKey } from "./auth";
 import { ShogoViewProvider } from "./ShogoViewProvider";
-import { getLogFile, initLogger, logInfo } from "./logger";
+import { getLogFile, initLogger, logInfo, logDebug } from "./logger";
+import { getEnvironmentContext } from "./context/environmentContext";
 
-export function activate(context: vscode.ExtensionContext): void {
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
   initLogger();
   logInfo("Extension activating");
+
+  // Detect environment at startup (cached for all subsequent calls)
+  logDebug("Detecting environment...");
+  const env = await getEnvironmentContext();
+  logDebug(`Environment ready: ${env.os} ${env.arch}, shell=${env.shell}, SSH=${env.isRemoteSSH}`);
 
   const provider = new ShogoViewProvider(context);
 

@@ -1,6 +1,6 @@
 import type { ToolDefinition, ToolExecutionContext, ToolResult } from "./types";
 import { getDiagnosticsTool } from "../tools/diagnostics";
-import { applyPatchTool, writeFileTool } from "../tools/editTools";
+import { applyPatchTool, writeFileTool, undoEditTool } from "../tools/editTools";
 import { listFilesTool, readFileTool, searchWorkspaceTool } from "../tools/fileTools";
 import { runCommandTool } from "../tools/runCommand";
 import { codeIndexTool, dependencyGraphTool } from "../tools/codeIndexTools";
@@ -8,6 +8,7 @@ import { gitStatusTool, gitDiffTool, gitLogTool } from "../tools/gitTools";
 import { projectMapTool } from "../tools/projectMap";
 import { buildCallGraphTool, impactAnalysisTool, deadCodeTool, callChainTool } from "../tools/codeGraphTools";
 import { findReferencesTool, goToDefinitionTool, getSymbolInfoTool, getDocumentSymbolsTool } from "../tools/lspTools";
+import { commandHistoryTool } from "../tools/commandHistory";
 import { logInfo, logError } from "../logger";
 
 const toolList: ToolDefinition[] = [
@@ -32,6 +33,8 @@ const toolList: ToolDefinition[] = [
   goToDefinitionTool,
   getSymbolInfoTool,
   getDocumentSymbolsTool,
+  undoEditTool,
+  commandHistoryTool,
 ];
 
 const tools = new Map(toolList.map((tool) => [tool.name, tool]));
@@ -58,6 +61,8 @@ const REQUIRED_PARAMS: Record<string, string[]> = {
   goToDefinition: ["symbol", "file"],
   getSymbolInfo: ["symbol", "file"],
   getDocumentSymbols: ["file"],
+  undoEdit: [],
+  commandHistory: [],
 };
 
 const PARAM_TYPES: Record<string, Record<string, "string" | "number" | "boolean">> = {
@@ -82,6 +87,8 @@ const PARAM_TYPES: Record<string, Record<string, "string" | "number" | "boolean"
   goToDefinition: { symbol: "string", file: "string", line: "number" },
   getSymbolInfo: { symbol: "string", file: "string", line: "number" },
   getDocumentSymbols: { file: "string" },
+  undoEdit: { path: "string" },
+  commandHistory: { count: "number", search: "string" },
 };
 
 /**

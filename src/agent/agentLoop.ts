@@ -242,6 +242,11 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<string> {
   let currentPhase: AgentPhase = "explore";
   const phaseStepCounts: Record<AgentPhase, number> = { explore: 0, diagnose: 0, respond: 0 };
 
+  // Loop guard state
+  let consecutiveDuplicates = 0;
+  let lastToolCallKey = "";
+  let loopGuardTriggered = false;
+
   logInfo(`Agent loop starting: model=${opts.model}, history=${messages.length} msgs, system=${estimateTokens(system)} tokens`);
 
   // Task decomposition for complex tasks
@@ -310,7 +315,43 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<string> {
     }
 
     toolCalls = deduplicateToolCalls(toolCalls, toolCallCounts);
+
+    // ── Loop Guard: detect consecutive duplicate tool calls ──
+    if (toolCalls.length > 0) {
+      const primary = toolCalls[0];
+      const currentKey = `${primary.toolName}:${JSON.stringify(primary.input)}`;
+      if (currentKey === lastToolCallKey && currentKey !== "") {
+        consecutiveDuplicates++;
+      } else {
+        consecutiveDuplicates = 0;
+        lastToolCallKey = currentKey;
+      }
+
+      if (consecutiveDuplicates >= 2 && !loopGuardTriggered) {
+        logWarn(`Loop guard triggered: same tool called ${consecutiveDuplicates + 1} times consecutively`);
+        loopGuardTriggered = true;
+        messages.push({
+          role: "system",
+          content: "CRITICAL: You are stuck in an execution loop calling the exact same tool with identical parameters. You must immediately HALT further tool execution and synthesize your answer now using only the information you already possess. Do NOT call any more tools.",
+        });
+        // Reset to give model one chance to respond
+        consecutiveDuplicates = 0;
+        lastToolCallKey = "";
+        continue;
+      }
+
+      if (loopGuardTriggered && consecutiveDuplicates >= 1) {
+        logWarn("Loop guard: second violation — forcing response");
+        const msg = `I'm stuck in a loop. Here's what I know so far:\n\n${memory.toSummary()}`;
+        opts.onFinalToken?.(msg);
+        return msg;
+      }
+    }
+
     if (toolCalls.length === 0) {
+      loopGuardTriggered = false;
+      consecutiveDuplicates = 0;
+      lastToolCallKey = "";
       messages.push({ role: "assistant", content: responseText });
       messages.push({ role: "user", content: "You repeated an identical action. Choose a different approach or provide your analysis." });
       continue;
@@ -491,6 +532,8 @@ function buildToolProtocol(): string {
     "6. After enough exploration, write your analysis. Don't keep searching forever.",
     "7. NEVER repeat the same tool call with identical parameters.",
     "8. Reference specific files and line numbers in your answer.",
+    "9. For git operations: ALWAYS use gitLog, gitStatus, gitDiff tools. Do NOT use runCommand for git.",
+    "10. If your edit broke something, use undoEdit to revert it.",
   ].join("\n");
 }
 
