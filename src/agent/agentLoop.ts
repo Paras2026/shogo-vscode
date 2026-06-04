@@ -17,72 +17,157 @@ export interface AgentLoopOptions {
   requestApproval?: (request: ApprovalRequest) => Promise<boolean>;
 }
 
-const MAX_STEPS = 16;
-const MAX_HISTORY_CHARS = 40000;
+const MAX_STEPS = 30;
+const COMPACTION_THRESHOLD_CHARS = 60000;
+const TOOL_RESULT_MAX_CHARS = 3000;
 const MAX_TOOL_ERROR_RETRIES = 3;
 const CHARS_PER_TOKEN = 4;
+
+function estimateChars(text: string): number {
+  return text.length;
+}
 
 function estimateTokens(text: string): number {
   return Math.ceil(text.length / CHARS_PER_TOKEN);
 }
 
-function trimHistory(messages: ChatMessage[]): ChatMessage[] {
-  let totalChars = 0;
-  const trimmed: ChatMessage[] = [];
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msgChars = messages[i].content.length;
-    if (totalChars + msgChars > MAX_HISTORY_CHARS && trimmed.length > 0) {
-      break;
-    }
-    totalChars += msgChars;
-    trimmed.unshift(messages[i]);
-  }
-  return trimmed;
+function totalMessagesChars(messages: ChatMessage[]): number {
+  return messages.reduce((sum, m) => sum + m.content.length, 0);
 }
 
+function compactHistory(messages: ChatMessage[]): ChatMessage[] {
+  if (totalMessagesChars(messages) < COMPACTION_THRESHOLD_CHARS) {
+    return messages;
+  }
 
-function parseTextToolCalls(text: string): StructuredToolCall[] {
-  const results: StructuredToolCall[] = [];
-  const seen = new Set<string>();
+  logWarn(`Context compaction triggered: ${totalMessagesChars(messages)} chars exceeds ${COMPACTION_THRESHOLD_CHARS}`);
 
-  const regex = /\{[^{}]*"tool"\s*:\s*"([^"]+)"[^{}]*\}/g;
-  let match;
-  while ((match = regex.exec(text)) !== null) {
-    try {
-      const parsed = JSON.parse(match[0]) as Record<string, unknown>;
-      const toolName = typeof parsed.tool === "string" ? parsed.tool : undefined;
-      if (!toolName) continue;
+  const keepRecent = 4;
+  const recent = messages.slice(-keepRecent);
+  const old = messages.slice(0, -keepRecent);
 
-      let input: Record<string, unknown> = {};
-      if (parsed.input && typeof parsed.input === "object" && !Array.isArray(parsed.input)) {
-        input = parsed.input as Record<string, unknown>;
-      } else if (parsed.arguments && typeof parsed.arguments === "object") {
-        input = parsed.arguments as Record<string, unknown>;
-      }
+  const summaryParts: string[] = [];
+  summaryParts.push("[CONTEXT COMPACTED — summary of earlier work]");
 
-      const key = `${toolName}:${JSON.stringify(input)}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
+  let filesRead = new Set<string>();
+  let filesSearched = new Set<string>();
+  let toolsUsed = new Map<string, number>();
 
-      results.push({ toolCallId: `text-${Date.now()}-${results.length}`, toolName, input });
-    } catch {
-      continue;
+  for (const msg of old) {
+    if (msg.role === "assistant") {
+      try {
+        const parsed = JSON.parse(msg.content);
+        if (parsed.type === "tool_call" && parsed.tool && parsed.input) {
+          toolsUsed.set(parsed.tool, (toolsUsed.get(parsed.tool) || 0) + 1);
+          if (parsed.tool === "readFile" && parsed.input.path) {
+            filesRead.add(parsed.input.path);
+          }
+          if (parsed.tool === "searchWorkspace" && parsed.input.query) {
+            filesSearched.add(parsed.input.query);
+          }
+          if (parsed.tool === "listFiles" && parsed.input.pattern) {
+            filesSearched.add("list:" + parsed.input.pattern);
+          }
+        }
+      } catch { /* not JSON */ }
+    }
+    if (msg.role === "user" && msg.content.startsWith("RESULT(")) {
+      const match = msg.content.match(/^RESULT\((\w+)\):/);
+      if (match) toolsUsed.set(match[1], (toolsUsed.get(match[1]) || 0) + 1);
     }
   }
-  return results;
+
+  if (filesRead.size > 0) {
+    summaryParts.push(`Files read: ${Array.from(filesRead).join(", ")}`);
+  }
+  if (filesSearched.size > 0) {
+    summaryParts.push(`Searches performed: ${Array.from(filesSearched).join(", ")}`);
+  }
+
+  const toolSummary = Array.from(toolsUsed.entries())
+    .map(([name, count]) => `${name}(${count}x)`)
+    .join(", ");
+  if (toolSummary) {
+    summaryParts.push(`Tools used: ${toolSummary}`);
+  }
+
+  let lastUserMsg = "";
+  for (let i = old.length - 1; i >= 0; i--) {
+    if (old[i].role === "user" && !old[i].content.startsWith("RESULT(")) {
+      lastUserMsg = old[i].content.slice(0, 500);
+      break;
+    }
+  }
+  if (lastUserMsg) {
+    summaryParts.push(`Original task: "${lastUserMsg}"`);
+  }
+
+  const compacted: ChatMessage[] = [
+    { role: "user", content: summaryParts.join("\n") },
+    { role: "assistant", content: "I have the context from our previous conversation. Continuing..." },
+    ...recent,
+  ];
+
+  logInfo(`Context compacted: ${messages.length} messages → ${compacted.length} messages (${totalMessagesChars(compacted)} chars)`);
+  return compacted;
+}
+
+function pruneToolResult(content: string): string {
+  if (content.length <= TOOL_RESULT_MAX_CHARS) {
+    return content;
+  }
+  const match = content.match(/^RESULT\((\w+)\):/);
+  if (match) {
+    const toolName = match[1];
+    const rest = content.slice(match[0].length);
+    const truncated = rest.slice(0, TOOL_RESULT_MAX_CHARS) + `\n...[pruned ${rest.length - TOOL_RESULT_MAX_CHARS} chars]`;
+    return `RESULT(${toolName}):${truncated}`;
+  }
+  return content.slice(0, TOOL_RESULT_MAX_CHARS) + `\n...[pruned]`;
+}
+
+function pruneHistory(messages: ChatMessage[]): ChatMessage[] {
+  const protectedCount = 10;
+  if (messages.length <= protectedCount) return messages;
+
+  const pruned = [...messages.slice(0, -protectedCount)];
+  for (let i = 0; i < pruned.length; i++) {
+    if (pruned[i].role === "user" && pruned[i].content.startsWith("RESULT(")) {
+      pruned[i] = { ...pruned[i], content: pruneToolResult(pruned[i].content) };
+    }
+  }
+  return [...pruned, ...messages.slice(-protectedCount)];
+}
+
+function deduplicateToolCalls(toolCalls: StructuredToolCall[], seen: Map<string, number>): StructuredToolCall[] {
+  return toolCalls.filter((tc) => {
+    const key = `${tc.toolName}:${JSON.stringify(tc.input)}`;
+    const count = seen.get(key) || 0;
+    if (count >= 2) {
+      logWarn(`Skipping duplicate tool call: ${key} (called ${count} times already)`);
+      return false;
+    }
+    seen.set(key, count + 1);
+    return true;
+  });
 }
 
 export async function runAgentLoop(opts: AgentLoopOptions): Promise<string> {
-  const messages: ChatMessage[] = trimHistory(opts.messages);
+  let messages: ChatMessage[] = opts.messages;
   const system = `${opts.system}\n\n${buildToolProtocol()}`;
   let successfulToolCalls = 0;
   let consecutiveToolErrors = 0;
   let correctedFalseSuccess = false;
+  const toolCallCounts = new Map<string, number>();
 
-  logInfo(`Agent loop starting: model=${opts.model}, history=${messages.length} msgs, system=${system.length} chars`);
+  logInfo(`Agent loop starting: model=${opts.model}, history=${messages.length} msgs, system=${estimateTokens(system)} tokens`);
 
   for (let step = 0; step < MAX_STEPS; step++) {
     logDebug(`Step ${step + 1}/${MAX_STEPS}`);
+
+    messages = compactHistory(messages);
+    messages = pruneHistory(messages);
+
     let responseText = "";
     let toolCalls: StructuredToolCall[] = [];
 
@@ -123,7 +208,6 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<string> {
         continue;
       }
 
-      opts.onFinalToken?.(cleanedText);
       const orphanChars = cleanedText.replace(/^[{}\s,]+|[{}\s,]+$/g, "");
       if (orphanChars.length === 0 && responseText.includes("tool_call")) {
         logWarn(`Response was entirely a tool call that wasn't parsed. Raw: ${responseText.slice(0, 200)}`);
@@ -140,7 +224,19 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<string> {
         continue;
       }
 
+      opts.onFinalToken?.(cleanedText);
       return cleanedText;
+    }
+
+    toolCalls = deduplicateToolCalls(toolCalls, toolCallCounts);
+
+    if (toolCalls.length === 0) {
+      messages.push({ role: "assistant", content: responseText });
+      messages.push({
+        role: "user",
+        content: "You repeated an action you've already done. Choose a different approach or provide your analysis.",
+      });
+      continue;
     }
 
     for (const toolCall of toolCalls) {
@@ -232,7 +328,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<string> {
   }
 
   logInfo(`Agent loop ended after ${MAX_STEPS} steps. Successful tools: ${successfulToolCalls}`);
-  const final = `I stopped after ${MAX_STEPS} steps to avoid looping. Ask me to continue if you want me to keep going.`;
+  const final = `I stopped after ${MAX_STEPS} steps. Ask me to continue if you want me to keep going.`;
   opts.onFinalToken?.(final);
   return final;
 }
@@ -248,13 +344,16 @@ function buildToolProtocol(): string {
     '{"type":"tool_call","tool":"runCommand","input":{"command":"ls -la"}}',
     '{"type":"tool_call","tool":"applyPatch","input":{"path":"src/index.ts","oldText":"old","newText":"new"}}',
     "",
-    "CRITICAL RULES:",
+    "RULES:",
     "1. Output ONLY the JSON object. No markdown fences, no explanation before/after.",
     "2. The JSON must be valid with nested braces properly closed.",
-    '3. Available tools: ' + toolNames,
-    "4. You MUST use tools. Never describe what you would do — actually do it with a tool.",
+    `3. Available tools: ${toolNames}`,
+    "4. Use tools to inspect and modify files. Never guess file contents.",
     "5. For edits: readFile first, then applyPatch with the EXACT oldText.",
     "6. One tool call per response. After the tool result, call the next tool.",
+    "7. After gathering enough information (10+ tool calls), provide your analysis and stop calling tools.",
+    "8. NEVER repeat the same tool call with the same parameters.",
+    "9. When writing your final analysis, reference specific files and line numbers.",
   ].join("\n");
 }
 
@@ -298,6 +397,7 @@ function looksLikeUnverifiedWorkspaceSuccess(text: string): boolean {
 
 function formatToolResult(tool: string, result: ToolResult): string {
   const payload = JSON.stringify(result);
-  const truncated = payload.length > 8000 ? payload.slice(0, 8000) + "...[truncated]" : payload;
+  const maxChars = TOOL_RESULT_MAX_CHARS;
+  const truncated = payload.length > maxChars ? payload.slice(0, maxChars) + "...[truncated]" : payload;
   return `RESULT(${tool}):${truncated}`;
 }
