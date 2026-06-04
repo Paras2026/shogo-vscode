@@ -4,7 +4,7 @@ import { runAgentLoop } from "./agent/agentLoop";
 import type { ApprovalRequest } from "./agent/types";
 import { buildSystemPrompt, gatherSmartWorkspaceContext } from "./context";
 import type { ChatMessage } from "./shogoClient";
-import { logInfo, logError, logDebug, initLogger, showOutputChannel } from "./logger";
+import { logInfo, logError, logDebug, logWarn, initLogger, showOutputChannel } from "./logger";
 
 interface Session {
   id: string;
@@ -43,24 +43,31 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.html = this.getHtml(webviewView.webview);
 
     webviewView.webview.onDidReceiveMessage(async (msg) => {
+      try {
+      logDebug(`Webview → Extension: ${msg.type}${msg.text ? " (\"" + String(msg.text).slice(0, 60) + "\")" : ""}${msg.model ? " model=" + msg.model : ""}`);
       switch (msg.type) {
         case "ready":
+          logDebug("Webview ready — sending auth state");
           await this.refreshAuthState();
           break;
         case "prompt":
+          logInfo(`Prompt received: "${(msg.text ?? "").slice(0, 80)}" model=${msg.model || "default"}`);
           await this.handlePrompt(msg.text, msg.model);
           break;
         case "setKey":
           await this.handleSetKey();
           break;
         case "stop":
+          logInfo("Stop requested by user");
           this.abortController?.abort();
           this.rejectAllApprovals();
           break;
         case "approvalResponse":
+          logInfo(`Approval response: id=${msg.id} approved=${msg.approved}`);
           this.handleApprovalResponse(msg.id, !!msg.approved);
           break;
         case "newChat":
+          logInfo("New chat requested");
           this.newChat();
           break;
         case "openFile":
@@ -75,6 +82,14 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
         case "deleteSession":
           this.handleDeleteSession(msg.sessionId);
           break;
+        default:
+          logWarn(`Unknown message type from webview: ${msg.type}`);
+      }
+      } catch (handlerErr) {
+        logError(`Message handler crashed for type="${msg.type}"`, handlerErr);
+        try {
+          this.post({ type: "error", text: `Internal error: ${handlerErr}` });
+        } catch {}
       }
     });
   }
@@ -108,6 +123,7 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
 
     logInfo(`User prompt: "${trimmed.slice(0, 100)}${trimmed.length > 100 ? "..." : ""}"`);
 
+    logDebug("Step 1: Checking API key...");
     const apiKey = await getApiKey(this.context);
     if (!apiKey) {
       logError("No API key set");
@@ -118,23 +134,41 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
       await this.refreshAuthState();
       return;
     }
+    logDebug("Step 1 done: API key exists");
 
+    logDebug("Step 2: Reading config...");
     const config = vscode.workspace.getConfiguration("shogo");
     const model = modelOverride || config.get<string>("model", "claude-sonnet-4-5");
     const includeFile = config.get<boolean>("includeActiveFile", true);
     const apiUrl = config.get<string>("apiUrl", "");
+    logDebug(`Step 2 done: model=${model}, includeFile=${includeFile}, apiUrl=${apiUrl || "(default)"}`);
 
-    const ctx = includeFile ? await gatherSmartWorkspaceContext(trimmed) : { workspaceName: undefined };
+    logDebug("Step 3: Gathering workspace context...");
+    let ctx;
+    try {
+      ctx = includeFile ? await gatherSmartWorkspaceContext(trimmed) : { workspaceName: undefined };
+    } catch (ctxErr) {
+      logError("Step 3 FAILED: gatherSmartWorkspaceContext threw", ctxErr);
+      this.post({ type: "error", text: `Context gathering failed: ${ctxErr}` });
+      this.post({ type: "assistantEnd" });
+      return;
+    }
+    logDebug("Step 3 done: context gathered");
+
+    logDebug("Step 4: Building system prompt...");
     const system = buildSystemPrompt(ctx);
+    logDebug(`Step 4 done: system prompt ${system.length} chars`);
 
     this.history.push({ role: "user", content: trimmed });
     this.post({ type: "userMessage", text: trimmed });
     this.post({ type: "assistantStart" });
+    logDebug("Step 5: Posted userMessage + assistantStart to webview");
 
     this.abortController = new AbortController();
     let assistantText = "";
 
     try {
+      logDebug("Step 6: Calling runAgentLoop...");
       assistantText = await runAgentLoop({
         apiKey,
         model,
@@ -151,6 +185,7 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
         },
         requestApproval: (request) => this.requestApproval(request),
       });
+      logDebug(`Step 6 done: runAgentLoop returned ${assistantText.length} chars`);
       this.history.push({ role: "assistant", content: assistantText });
     } catch (err: unknown) {
       logError("Agent loop failed", err);

@@ -60,6 +60,10 @@
         "command": "shogo.newChat",
         "title": "Shogo: New Chat",
         "icon": "$(add)"
+      },
+      {
+        "command": "shogo.showLogs",
+        "title": "Shogo: Show Logs"
       }
     ],
     "menus": {

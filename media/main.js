@@ -1,5 +1,6 @@
 (function () {
   var vscode = acquireVsCodeApi();
+  console.log("[Shogo:WEB] Webview JS loaded at", new Date().toISOString());
 
   var messagesEl = document.getElementById("messages");
   var inputEl = document.getElementById("input");
@@ -12,11 +13,30 @@
   var historyDrawer = document.getElementById("history-drawer");
   var newChatBtn = document.getElementById("new-chat-btn");
 
+  console.log("[Shogo:WEB] DOM elements:", {
+    messages: !!messagesEl, input: !!inputEl, sendBtn: !!sendBtn,
+    stopBtn: !!stopBtn, authBanner: !!authBanner, modelSelect: !!modelSelect
+  });
+
   var currentAssistantRaw = "";
   var currentAssistantEl = null;
   var streaming = false;
   var chatTitle = "New Chat";
   var spinnerEl = null;
+  var debugPanel = null;
+  var debugLog = [];
+
+  function addDebugLog(level, text) {
+    var ts = new Date().toISOString().slice(11, 23);
+    var entry = ts + " [" + level + "] " + text;
+    debugLog.push(entry);
+    if (debugLog.length > 200) debugLog.shift();
+    if (debugPanel) {
+      debugPanel.textContent = debugLog.slice(-30).join("\n");
+      debugPanel.scrollTop = debugPanel.scrollHeight;
+    }
+  }
+  addDebugLog("INFO", "Webview initialized. Model: " + (modelSelect ? modelSelect.value : "N/A"));
 
   function setStreaming(on) {
     streaming = on;
@@ -229,9 +249,14 @@
 
   function send() {
     var text = inputEl.value.trim();
-    if (!text || streaming) return;
+    if (!text || streaming) {
+      addDebugLog("WARN", "Send blocked: text=" + !!text + " streaming=" + streaming);
+      return;
+    }
     inputEl.value = "";
     var model = modelSelect.value;
+    addDebugLog("INFO", "Sending prompt: \"" + text.slice(0, 80) + "\" model=" + model);
+    console.log("[Shogo:WEB] Sending prompt:", { text: text.slice(0, 80), model: model });
     vscode.postMessage({ type: "prompt", text: text, model: model });
   }
 
@@ -278,9 +303,16 @@
 
   window.addEventListener("message", function (event) {
     var msg = event.data;
+    if (!msg || !msg.type) {
+      addDebugLog("WARN", "Received message with no type: " + JSON.stringify(msg).slice(0, 100));
+      return;
+    }
+    addDebugLog("IN ←", msg.type + (msg.text ? " (" + String(msg.text).slice(0, 60) + ")" : ""));
+    console.log("[Shogo:WEB] Received:", msg.type, msg);
     switch (msg.type) {
       case "authState":
         authBanner.classList.toggle("hidden", msg.hasKey);
+        addDebugLog("INFO", "Auth state: hasKey=" + msg.hasKey);
         break;
       case "userMessage":
         addMessage("user", msg.text);
@@ -293,6 +325,7 @@
         setStreaming(true);
         currentAssistantRaw = "";
         currentAssistantEl = null;
+        addDebugLog("INFO", "Assistant stream started");
         break;
       case "assistantToken":
         hideSpinner();
@@ -311,12 +344,15 @@
           currentAssistantEl = null;
         }
         setStreaming(false);
+        addDebugLog("INFO", "Assistant stream ended. Total chars: " + currentAssistantRaw.length);
         break;
       case "toolActivity":
         addMessage("tool", msg.text);
+        addDebugLog("TOOL", msg.text);
         break;
       case "approvalRequest":
         addApprovalCard(msg.request || {});
+        addDebugLog("INFO", "Approval needed: " + (msg.request?.title || "unknown"));
         break;
       case "error":
         hideSpinner();
@@ -326,6 +362,7 @@
         }
         addMessage("error", msg.text);
         setStreaming(false);
+        addDebugLog("ERROR", msg.text);
         break;
       case "clear":
         messagesEl.innerHTML = "";
@@ -335,6 +372,7 @@
         setStreaming(false);
         chatTitle = "New Chat";
         document.getElementById("header-logo").textContent = "⚡ Shogo";
+        addDebugLog("INFO", "Chat cleared");
         break;
       case "sessionList":
         renderSessionList(msg.sessions || []);
@@ -386,5 +424,23 @@
     });
   }
 
+  // Debug panel toggle — click the ⚡ logo to show/hide debug log
+  document.getElementById("header-logo").addEventListener("click", function () {
+    if (!debugPanel) {
+      debugPanel = document.createElement("pre");
+      debugPanel.id = "debug-panel";
+      debugPanel.style.cssText = "position:fixed;bottom:60px;left:0;right:0;height:180px;overflow:auto;background:#1a1a2e;color:#0f0;font:11px monospace;padding:8px;z-index:999;border-top:1px solid #333;margin:0;white-space:pre-wrap;word-break:break-all;";
+      debugPanel.textContent = debugLog.slice(-30).join("\n");
+      document.body.appendChild(debugPanel);
+    } else if (debugPanel.style.display === "none") {
+      debugPanel.style.display = "block";
+      debugPanel.textContent = debugLog.slice(-30).join("\n");
+      debugPanel.scrollTop = debugPanel.scrollHeight;
+    } else {
+      debugPanel.style.display = "none";
+    }
+  });
+
+  addDebugLog("INFO", "All event listeners attached. Ready.");
   vscode.postMessage({ type: "ready" });
 })();

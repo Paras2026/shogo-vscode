@@ -1,8 +1,13 @@
 import * as vscode from "vscode";
+import * as fs from "fs";
 import { clearApiKey, setApiKey } from "./auth";
 import { ShogoViewProvider } from "./ShogoViewProvider";
+import { getLogFile, initLogger, logInfo } from "./logger";
 
 export function activate(context: vscode.ExtensionContext): void {
+  initLogger();
+  logInfo("Extension activating");
+
   const provider = new ShogoViewProvider(context);
 
   context.subscriptions.push(
@@ -36,8 +41,18 @@ export function activate(context: vscode.ExtensionContext): void {
       provider.newChat();
     })
   );
-}
 
-export function deactivate(): void {
-  // nothing to clean up
+  context.subscriptions.push(
+    vscode.commands.registerCommand("shogo.showLogs", async () => {
+      const logFile = getLogFile();
+      if (logFile && fs.existsSync(logFile)) {
+        const doc = await vscode.workspace.openTextDocument(logFile);
+        await vscode.window.showTextDocument(doc);
+      } else {
+        vscode.window.showWarningMessage("No Shogo log file found yet. Send a message first.");
+      }
+    })
+  );
+
+  logInfo("Extension activated — all commands registered");
 }
