@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { gatherSmartContext, type SmartContextResult } from "./context/smartContext";
+import { logWarn } from "./logger";
 
 export interface WorkspaceContext {
   workspaceName?: string;
@@ -42,7 +43,15 @@ export async function gatherSmartWorkspaceContext(userMessage: string): Promise<
   const ctx = await gatherContext();
 
   try {
-    ctx.smartContext = await gatherSmartContext(userMessage, ctx.filePath);
+    ctx.smartContext = await Promise.race([
+      gatherSmartContext(userMessage, ctx.filePath),
+      new Promise<undefined>((resolve) =>
+        setTimeout(() => {
+          logWarn("Smart context gathering timed out after 5s — skipping");
+          resolve(undefined);
+        }, 5000)
+      ),
+    ]);
   } catch {
     ctx.smartContext = undefined;
   }
