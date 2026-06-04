@@ -28,18 +28,14 @@ export const listFilesTool: ToolDefinition = {
     if (!root) return { ok: false, error: "No workspace folder is open." };
 
     const pattern = typeof input.pattern === "string" ? input.pattern : "**/*";
+
+    // Use VS Code API (cross-platform, always works)
     try {
-      const stdout = await execCommand(
-        `find . -path './node_modules' -prune -o -path './.git' -prune -o -path './dist' -prune -o -type f -name '${pattern.replace("**/*", "*").replace("**/", "")}' -print | head -${max}`,
-        root
-      );
-      const files = stdout.trim().split("\n").filter(Boolean).slice(0, max);
-      return { ok: true, data: { files } };
-    } catch {
-      // Fallback to VS Code API
       const exclude = "{**/node_modules/**,**/.git/**,**/dist/**,**/build/**,**/.next/**,**/coverage/**,**/*.vsix}";
       const uris = await vscode.workspace.findFiles(pattern, exclude, max);
       return { ok: true, data: { files: uris.map(asRelative) } };
+    } catch (err) {
+      return { ok: false, error: `Failed to list files: ${err instanceof Error ? err.message : "Unknown error"}` };
     }
   },
 };
@@ -238,9 +234,14 @@ export const searchWorkspaceTool: ToolDefinition = {
 
 function execCommand(cmd: string, cwd: string, timeoutMs = 15000): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn("sh", ["-c", cmd], {
+    const isWin = process.platform === "win32";
+    const shell = isWin ? "powershell.exe" : (process.env.SHELL || "/bin/sh");
+    const args = isWin
+      ? ["-NoProfile", "-NonInteractive", "-Command", cmd]
+      : ["-c", cmd];
+    const child = spawn(shell, args, {
       cwd,
-      env: { ...process.env, CI: "true", GIT_TERMINAL_PROMPT: "0" },
+      env: { ...process.env, CI: "true", GIT_TERMINAL_PROMPT: "0", GIT_PAGER: "cat", PAGER: "cat" },
       timeout: timeoutMs,
     });
     let stdout = "";
