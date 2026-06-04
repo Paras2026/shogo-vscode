@@ -85,13 +85,16 @@ export const runBackgroundTool: ToolDefinition = {
       const terminal = getOrCreateTerminal();
       terminal.show(true);
 
-      // Send a clear marker + the command + completion marker
-      const marker = `echo "\\n--- SHOGO_BG_${jobId}_START ---"`;
-      const endMarker = `echo "\\n--- SHOGO_BG_${jobId}_EXIT=$? ---"`;
+      // Platform-specific marker syntax
+      const isWin = process.platform === "win32";
+      const nl = isWin ? "`n" : "\\n";
+      const exitExpr = isWin
+        ? `$(if ($null -ne $global:LastExitCode) { $global:LastExitCode } elseif ($?) { 0 } else { 1 })`
+        : "$?";
 
-      terminal.sendText(marker);
+      terminal.sendText(`echo "${nl}--- SHOGO_BG_${jobId}_START ---"`);
       terminal.sendText(command);
-      terminal.sendText(endMarker);
+      terminal.sendText(`echo "${nl}--- SHOGO_BG_${jobId}_EXIT=${exitExpr} ---"`);
 
       const job: BackgroundJob = {
         id: jobId,

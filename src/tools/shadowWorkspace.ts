@@ -101,6 +101,8 @@ export function getShadowContent(relativePath: string): string | null {
 
 /**
  * Show a unified diff of ALL shadowed files and ask user to accept/discard.
+ * Uses vscode.Uri.joinPath for Remote-SSH compatibility.
+ * Limits open diffs to prevent tab bombing.
  */
 export async function reviewShadowChanges(
   requestApproval?: (request: {
@@ -129,19 +131,57 @@ export async function reviewShadowChanges(
 
   logInfo(`Reviewing ${changedFiles.length} shadow file changes`);
 
-  // Open diff for each changed file
-  for (const entry of changedFiles) {
-    try {
-      const origUri = vscode.Uri.file(entry.absolutePath);
-      const shadowUri = vscode.Uri.file(path.join(shadowRoot!, entry.relativePath));
-      await vscode.commands.executeCommand(
-        "vscode.diff",
-        origUri,
-        shadowUri,
-        `Shogo: ${entry.relativePath} (${changedFiles.indexOf(entry) + 1}/${changedFiles.length})`,
-      );
-    } catch (err) {
-      logWarn(`Failed to open diff for ${entry.relativePath}: ${err}`);
+  // Tab bombing protection: if >3 files changed, show QuickPick list
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+  if (!workspaceFolder) {
+    logWarn("No workspace folder — cannot open diffs");
+    clearShadowWorkspace();
+    return false;
+  }
+
+  const baseUri = workspaceFolder.uri;
+
+  if (changedFiles.length <= 3) {
+    // Small change set: open diffs directly
+    for (let i = 0; i < changedFiles.length; i++) {
+      try {
+        const origUri = vscode.Uri.joinPath(baseUri, changedFiles[i].relativePath);
+        const shadowUri = vscode.Uri.joinPath(baseUri, SHADOW_DIR, changedFiles[i].relativePath);
+        await vscode.commands.executeCommand(
+          "vscode.diff",
+          origUri,
+          shadowUri,
+          `Shogo: ${changedFiles[i].relativePath} (${i + 1}/${changedFiles.length})`,
+        );
+      } catch (err) {
+        logWarn(`Failed to open diff for ${changedFiles[i].relativePath}: ${err}`);
+      }
+    }
+  } else {
+    // Large change set: show QuickPick so user can review individually
+    const picked = await vscode.window.showQuickPick(
+      changedFiles.map((e) => ({
+        label: `$(diff) ${e.relativePath}`,
+        description: `+${e.modifiedContent.split("\n").length} lines`,
+        detail: e.relativePath,
+      })),
+      {
+        title: `Shogo: ${changedFiles.length} files changed — pick to review`,
+        placeHolder: "Select a file to open diff, or press Escape to skip",
+        canPickMany: true,
+      },
+    );
+
+    if (picked && picked.length > 0) {
+      for (const item of picked) {
+        try {
+          const origUri = vscode.Uri.joinPath(baseUri, item.detail!);
+          const shadowUri = vscode.Uri.joinPath(baseUri, SHADOW_DIR, item.detail!);
+          await vscode.commands.executeCommand("vscode.diff", origUri, shadowUri, `Shogo: ${item.detail}`);
+        } catch (err) {
+          logWarn(`Failed to open diff: ${err}`);
+        }
+      }
     }
   }
 
@@ -158,7 +198,6 @@ export async function reviewShadowChanges(
     });
 
     if (approved) {
-      // Write all shadow files back to originals
       for (const entry of changedFiles) {
         await fs.promises.writeFile(entry.absolutePath, entry.modifiedContent, "utf-8");
         logInfo(`Applied shadow edit: ${entry.relativePath}`);

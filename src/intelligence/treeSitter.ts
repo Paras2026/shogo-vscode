@@ -35,14 +35,12 @@ export interface AstIndex {
 
 // Regex-based fallback parsers for when WASM isn't available
 const JS_PATTERNS = {
-  functions: /(?:(?:export|async)\s+)*function\s+(\w+)\s*\(([^)]*)\)/g,
+  functions: /(?:(?:export|async)\s+)*function\s+(\w+)\s*\(([^)]*)\)|(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?(?:(?:\([^)]*\))|\w+)\s*=>/g,
   classes: /(?:export\s+)?class\s+(\w+)(?:\s+extends\s+\w+)?(?:\s+implements\s+[\w,\s]+)?\s*\{/g,
-  arrowFunctions: /(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?\(([^)]*)\)\s*=>/g,
   interfaces: /(?:export\s+)?interface\s+(\w+)/g,
   types: /(?:export\s+)?type\s+(\w+)/g,
-  imports: /(?:import|from)\s+(?:\{([^}]+)\}|(\w+))\s+from\s+['"]([^'"]+)['"]/g,
+  imports: /import\s+(?:\{([^}]+)\}|(\w+))\s+from\s+['"]([^'"]+)['"]|import\s+['"]([^'"]+)['"]/g,
   exports: /export\s+(?:default\s+)?(?:function|class|const|let|var|type|interface|enum)\s+(\w+)/g,
-  methods: /^\s+(?:(?:async|static|get|set|public|private|protected)\s+)*(\w+)\s*\(/gm,
 };
 
 const PY_PATTERNS = {
@@ -73,13 +71,14 @@ export function parseFileRegex(filePath: string, content: string): AstIndex {
     return { filePath, language, symbols: [], imports: [], exports: [], functions: [], classes: [], totalNodes: 0, parseTimeMs: 0 };
   }
 
-  // Parse functions
+  // Parse functions (handles both function declarations and arrow functions)
   if ("functions" in patterns) {
     let m: RegExpExecArray | null;
     const funcRegex = new RegExp(patterns.functions.source, "gm");
     while ((m = funcRegex.exec(content)) !== null) {
       const line = content.slice(0, m.index).split("\n").length;
-      const name = m[1];
+      // Group 1 = function declaration name, Group 2 = function params, Group 3 = arrow function name
+      const name = m[1] || m[3] || "anonymous";
       const params = m[2] || "";
       functions.push({ name, line, params });
       symbols.push({ name, kind: "function", startLine: line, endLine: line, exports: false });
@@ -129,16 +128,21 @@ export function parseFileRegex(filePath: string, content: string): AstIndex {
     }
   }
 
-  // Parse imports
+  // Parse imports (handles named, default, and side-effect imports)
   if ("imports" in patterns) {
     let m: RegExpExecArray | null;
     const importRegex = new RegExp(patterns.imports.source, "gm");
     while ((m = importRegex.exec(content)) !== null) {
       if (isJsLike) {
-        const namedImports = m[1] ? m[1].split(",").map((s) => s.trim()) : [];
-        const defaultImport = m[2] || "";
-        const source = m[3] || "";
-        imports.push({ source, specifiers: [...namedImports, defaultImport].filter(Boolean) });
+        if (m[4]) {
+          // Side-effect import: import "./polyfill"
+          imports.push({ source: m[4], specifiers: ["*"] });
+        } else {
+          const namedImports = m[1] ? m[1].split(",").map((s) => s.trim()) : [];
+          const defaultImport = m[2] || "";
+          const source = m[3] || "";
+          imports.push({ source, specifiers: [...namedImports, defaultImport].filter(Boolean) });
+        }
       } else {
         imports.push({ source: m[1] || "", specifiers: m[2] ? m[2].split(",").map((s) => s.trim()) : [] });
       }

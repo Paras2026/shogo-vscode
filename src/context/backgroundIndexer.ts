@@ -6,7 +6,6 @@
  */
 import * as fs from "fs";
 import * as path from "path";
-import { spawn } from "child_process";
 import * as vscode from "vscode";
 import { logInfo, logDebug, logWarn } from "../logger";
 
@@ -193,12 +192,56 @@ function extractSymbols(content: string, language: string): string[] {
   return symbols.slice(0, 50); // Cap per file
 }
 
+const CODE_EXTENSIONS = new Set([
+  ".ts", ".tsx", ".js", ".jsx", ".py", ".rs", ".go",
+  ".java", ".rb", ".php", ".css", ".scss", ".html",
+  ".vue", ".svelte", ".md", ".json", ".yaml", ".yml",
+]);
+
+const SKIP_DIRS = new Set([
+  "node_modules", ".git", "dist", "build", ".next",
+  "coverage", ".vscode", "__pycache__", ".cache",
+  "out", "target", ".shogo",
+]);
+
+const MAX_DEPTH = 6;
+const MAX_FILE_SIZE = 500_000;
+
 /**
- * Run the background indexer using ripgrep + node fs.
+ * Cross-platform recursive file walker using Node.js fs.
+ * Works identically on Windows, Linux, and macOS.
+ */
+function walkDir(dirPath: string, depth: number, results: string[]): void {
+  if (depth > MAX_DEPTH) return;
+  try {
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      if (SKIP_DIRS.has(entry.name)) continue;
+
+      const fullPath = path.join(dirPath, entry.name);
+      if (entry.isDirectory()) {
+        walkDir(fullPath, depth + 1, results);
+      } else if (entry.isFile()) {
+        const ext = path.extname(entry.name).toLowerCase();
+        if (CODE_EXTENSIONS.has(ext)) {
+          try {
+            const stat = fs.statSync(fullPath);
+            if (stat.size <= MAX_FILE_SIZE) {
+              results.push(fullPath);
+            }
+          } catch {}
+        }
+      }
+    }
+  } catch {}
+}
+
+/**
+ * Run the background indexer using native Node.js fs (cross-platform).
  */
 async function runIndexer(): Promise<void> {
   if (indexerRunning) return;
-  
+
   const root = vscode.workspace.workspaceFolders?.[0];
   if (!root) return;
 
@@ -216,30 +259,11 @@ async function runIndexer(): Promise<void> {
     const rootPath = root.uri.fsPath;
     const files: ProjectMapEntry[] = [];
 
-    // Use find command for fast file discovery
-    const fileTree = await new Promise<string>((resolve) => {
-      const args = ["-maxdepth", "6", "-type", "f",
-        "!", "-path", "*/node_modules/*",
-        "!", "-path", "*/.git/*",
-        "!", "-path", "*/dist/*",
-        "!", "-path", "*/build/*",
-        "!", "-path", "*/.next/*",
-        "-name", "*.ts", "-o", "-name", "*.tsx", "-o", "-name", "*.js",
-        "-o", "-name", "*.jsx", "-o", "-name", "*.py", "-o", "-name", "*.rs",
-        "-o", "-name", "*.go", "-o", "-name", "*.java", "-o", "-name", "*.rb",
-        "-o", "-name", "*.css", "-o", "-name", "*.html", "-o", "*.md"];
-      
-      let output = "";
-      const proc = spawn("find", args, { cwd: rootPath, stdio: ["pipe", "pipe", "pipe"] });
-      proc.stdout?.on("data", (d: Buffer) => { output += d.toString(); });
-      proc.on("close", () => resolve(output));
-      proc.on("error", () => resolve(""));
-      
-      // Timeout after 10s
-      setTimeout(() => { try { proc.kill(); } catch {} resolve(output); }, 10000);
-    });
+    // Cross-platform: uses Node.js fs.readdirSync instead of Unix `find`
+    const absolutePaths: string[] = [];
+    walkDir(rootPath, 0, absolutePaths);
 
-    const filePaths = fileTree.split("\n").filter((f) => f.trim().length > 0);
+    const filePaths = absolutePaths.map((abs) => path.relative(rootPath, abs));
 
     // Process files in batches for memory efficiency
     const BATCH_SIZE = 50;
