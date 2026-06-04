@@ -2,7 +2,7 @@
   "name": "shogo-vscode",
   "displayName": "Shogo Chat",
   "description": "Chat with a Shogo Cloud agent right inside VS Code, with your workspace as context.",
-  "version": "0.0.7",
+  "version": "0.4.0",
   "publisher": "your-team",
   "private": true,
   "extensionKind": [

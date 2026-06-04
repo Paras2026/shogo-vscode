@@ -534,6 +534,10 @@ function buildToolProtocol(): string {
     "8. Reference specific files and line numbers in your answer.",
     "9. For git operations: ALWAYS use gitLog, gitStatus, gitDiff tools. Do NOT use runCommand for git.",
     "10. If your edit broke something, use undoEdit to revert it.",
+    "11. For long commands (npm install, pytest, build): use runBackground to avoid blocking.",
+    "12. For symbol search across files: use getWorkspaceSymbols. For type info: getSignatureHelp.",
+    "13. For understanding class hierarchies: use getTypeHierarchy.",
+    "14. For refactoring suggestions: use getCodeActions.",
   ].join("\n");
 }
 

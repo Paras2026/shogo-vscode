@@ -4,10 +4,19 @@ import { clearApiKey, setApiKey } from "./auth";
 import { ShogoViewProvider } from "./ShogoViewProvider";
 import { getLogFile, initLogger, logInfo, logDebug } from "./logger";
 import { getEnvironmentContext } from "./context/environmentContext";
+import { initBackgroundIndexer, disposeBackgroundIndexer } from "./context/backgroundIndexer";
+import { initShadowWorkspace } from "./tools/shadowWorkspace";
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   initLogger();
   logInfo("Extension activating");
+
+  // Initialize background indexer (runs ripgrep in background, builds project_map.json)
+  logDebug("Starting background indexer...");
+  initBackgroundIndexer();
+
+  // Initialize shadow workspace
+  initShadowWorkspace();
 
   // Detect environment at startup (cached for all subsequent calls)
   logDebug("Detecting environment...");
@@ -59,6 +68,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     })
   );
+
+  context.subscriptions.push({
+    dispose: () => {
+      disposeBackgroundIndexer();
+    },
+  });
 
   logInfo("Extension activated — all commands registered");
 }

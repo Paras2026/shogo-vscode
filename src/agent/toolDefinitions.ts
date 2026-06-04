@@ -348,4 +348,64 @@ export const TOOL_DEFINITIONS: Record<string, { description: string; parameters:
       required: ["file"],
     },
   },
+  getSignatureHelp: {
+    description: "Get function signature help (parameter types, overloads) at a specific position.",
+    parameters: {
+      type: "object",
+      properties: {
+        file: { type: "string", description: "Workspace-relative file path" },
+        line: { type: "number", description: "Line number (1-based)" },
+        character: { type: "number", description: "Column number (1-based)" },
+      },
+      required: ["file", "line"],
+    },
+  },
+  getCodeActions: {
+    description: "Get available code actions (refactoring, quick fixes) at a location.",
+    parameters: {
+      type: "object",
+      properties: {
+        file: { type: "string", description: "Workspace-relative file path" },
+        line: { type: "number", description: "Line number (1-based)" },
+        length: { type: "number", description: "Selection length" },
+      },
+      required: ["file"],
+    },
+  },
+  getWorkspaceSymbols: {
+    description: "Search for symbols across the entire workspace. More powerful than getDocumentSymbols.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Symbol name to search for" },
+      },
+      required: ["query"],
+    },
+  },
+  getTypeHierarchy: {
+    description: "Get type hierarchy — what extends/implements a class or interface.",
+    parameters: {
+      type: "object",
+      properties: {
+        file: { type: "string", description: "Workspace-relative file path" },
+        line: { type: "number", description: "Line where the class/interface is defined" },
+      },
+      required: ["file", "line"],
+    },
+  },
+  runBackground: {
+    description: "Run a long command in a visible VS Code terminal. Use for npm install, build, test, etc.",
+    parameters: {
+      type: "object",
+      properties: {
+        command: { type: "string", description: "Shell command to run" },
+        label: { type: "string", description: "Optional label" },
+      },
+      required: ["command"],
+    },
+  },
+  backgroundStatus: {
+    description: "Check status of all background terminal jobs.",
+    parameters: { type: "object", properties: {} },
+  },
 };

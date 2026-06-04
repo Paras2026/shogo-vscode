@@ -8,6 +8,8 @@ import { gitStatusTool, gitDiffTool, gitLogTool } from "../tools/gitTools";
 import { projectMapTool } from "../tools/projectMap";
 import { buildCallGraphTool, impactAnalysisTool, deadCodeTool, callChainTool } from "../tools/codeGraphTools";
 import { findReferencesTool, goToDefinitionTool, getSymbolInfoTool, getDocumentSymbolsTool } from "../tools/lspTools";
+import { getSignatureHelpTool, getCodeActionsTool, getWorkspaceSymbolsTool, getTypeHierarchyTool } from "../tools/enhancedLspTools";
+import { runBackgroundTool, backgroundStatusTool } from "../tools/backgroundTerminal";
 import { commandHistoryTool } from "../tools/commandHistory";
 import { logInfo, logError } from "../logger";
 
@@ -19,6 +21,8 @@ const toolList: ToolDefinition[] = [
   applyPatchTool,
   writeFileTool,
   runCommandTool,
+  runBackgroundTool,
+  backgroundStatusTool,
   codeIndexTool,
   dependencyGraphTool,
   gitStatusTool,
@@ -33,6 +37,10 @@ const toolList: ToolDefinition[] = [
   goToDefinitionTool,
   getSymbolInfoTool,
   getDocumentSymbolsTool,
+  getSignatureHelpTool,
+  getCodeActionsTool,
+  getWorkspaceSymbolsTool,
+  getTypeHierarchyTool,
   undoEditTool,
   commandHistoryTool,
 ];
@@ -61,6 +69,12 @@ const REQUIRED_PARAMS: Record<string, string[]> = {
   goToDefinition: ["symbol", "file"],
   getSymbolInfo: ["symbol", "file"],
   getDocumentSymbols: ["file"],
+  getSignatureHelp: ["file", "line"],
+  getCodeActions: ["file"],
+  getWorkspaceSymbols: ["query"],
+  getTypeHierarchy: ["file", "line"],
+  runBackground: ["command"],
+  backgroundStatus: [],
   undoEdit: [],
   commandHistory: [],
 };
@@ -87,6 +101,12 @@ const PARAM_TYPES: Record<string, Record<string, "string" | "number" | "boolean"
   goToDefinition: { symbol: "string", file: "string", line: "number" },
   getSymbolInfo: { symbol: "string", file: "string", line: "number" },
   getDocumentSymbols: { file: "string" },
+  getSignatureHelp: { file: "string", line: "number", character: "number" },
+  getCodeActions: { file: "string", line: "number", length: "number" },
+  getWorkspaceSymbols: { query: "string" },
+  getTypeHierarchy: { file: "string", line: "number" },
+  runBackground: { command: "string", label: "string" },
+  backgroundStatus: {},
   undoEdit: { path: "string" },
   commandHistory: { count: "number", search: "string" },
 };

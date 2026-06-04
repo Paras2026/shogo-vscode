@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { gatherSmartContext, type SmartContextResult } from "./context/smartContext";
 import { getEnvironmentContext, formatEnvironmentForPrompt, type EnvironmentContext } from "./context/environmentContext";
+import { getProjectMap } from "./context/backgroundIndexer";
 import { logWarn, logDebug } from "./logger";
 
 export interface WorkspaceContext {
@@ -132,6 +133,19 @@ export function buildSystemPrompt(ctx: WorkspaceContext): string {
         .map((c) => `  - ${c.status}: ${c.path}`)
         .join("\n");
       parts.push(`RECENT GIT CHANGES:\n${changeList}`);
+    }
+  }
+
+  // Use background indexer data (instant, pre-cached)
+  const projectMap = getProjectMap();
+  if (projectMap) {
+    const topExports = projectMap.files
+      .filter((f) => f.symbols.length > 0)
+      .slice(0, 100)
+      .map((f) => `  ${f.path} [${f.language}, ${f.lines}L] → ${f.symbols.slice(0, 8).join(", ")}`)
+      .join("\n");
+    if (topExports) {
+      parts.push(`PRE-INDEXED PROJECT MAP (${projectMap.fileCount} files, ${projectMap.totalLines} lines):\n${topExports}`);
     }
   }
 
