@@ -4,6 +4,7 @@ import * as os from "os";
 import * as fs from "fs";
 import * as path from "path";
 import type { ToolDefinition, ToolResult } from "../agent/types";
+import { logWarn } from "../logger";
 
 function findGitBinary(): string {
   const platform = os.platform();
@@ -42,7 +43,12 @@ async function runGit(args: string[], cwd: string, signal?: AbortSignal): Promis
 function getCwd(inputCwd?: unknown): string {
   const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
   if (typeof inputCwd === "string" && inputCwd.trim()) {
-    return path.resolve(root, inputCwd.trim());
+    const resolved = path.resolve(root, inputCwd.trim());
+    if (!resolved.startsWith(root)) {
+      logWarn(`Blocked path traversal: "${inputCwd}" resolved to ${resolved}`);
+      return root;
+    }
+    return resolved;
   }
   return root;
 }

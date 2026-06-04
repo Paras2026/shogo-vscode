@@ -208,36 +208,38 @@ const MAX_DEPTH = 6;
 const MAX_FILE_SIZE = 500_000;
 
 /**
- * Cross-platform recursive file walker using Node.js fs.
- * Works identically on Windows, Linux, and macOS.
+ * Cross-platform recursive file walker using async Node.js fs.
+ * Yields to the event loop on every directory read — won't freeze VS Code UI.
  */
-function walkDir(dirPath: string, depth: number, results: string[]): void {
+async function walkDir(dirPath: string, depth: number, results: string[]): Promise<void> {
   if (depth > MAX_DEPTH) return;
+  let entries: fs.Dirent[];
   try {
-    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
-    if (depth === 0) {
-      logDebug(`walkDir: scanning root=${dirPath}, ${entries.length} entries`);
-    }
-    for (const entry of entries) {
-      if (SKIP_DIRS.has(entry.name)) continue;
-
-      const fullPath = path.join(dirPath, entry.name);
-      if (entry.isDirectory()) {
-        walkDir(fullPath, depth + 1, results);
-      } else if (entry.isFile()) {
-        const ext = path.extname(entry.name).toLowerCase();
-        if (CODE_EXTENSIONS.has(ext)) {
-          try {
-            const stat = fs.statSync(fullPath);
-            if (stat.size <= MAX_FILE_SIZE) {
-              results.push(fullPath);
-            }
-          } catch {}
-        }
-      }
-    }
+    entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
   } catch (err) {
     if (depth === 0) logWarn(`walkDir: failed to read ${dirPath}: ${err}`);
+    return;
+  }
+  if (depth === 0) {
+    logDebug(`walkDir: scanning root=${dirPath}, ${entries.length} entries`);
+  }
+  for (const entry of entries) {
+    if (SKIP_DIRS.has(entry.name)) continue;
+
+    const fullPath = path.join(dirPath, entry.name);
+    if (entry.isDirectory()) {
+      await walkDir(fullPath, depth + 1, results);
+    } else if (entry.isFile()) {
+      const ext = path.extname(entry.name).toLowerCase();
+      if (CODE_EXTENSIONS.has(ext)) {
+        try {
+          const stat = await fs.promises.stat(fullPath);
+          if (stat.size <= MAX_FILE_SIZE) {
+            results.push(fullPath);
+          }
+        } catch {}
+      }
+    }
   }
 }
 
@@ -264,9 +266,9 @@ async function runIndexer(): Promise<void> {
     const rootPath = root.uri.fsPath;
     const files: ProjectMapEntry[] = [];
 
-    // Cross-platform: uses Node.js fs.readdirSync instead of Unix `find`
+    // Cross-platform: uses Node.js fs.promises.readdir (async, won't freeze UI)
     const absolutePaths: string[] = [];
-    walkDir(rootPath, 0, absolutePaths);
+    await walkDir(rootPath, 0, absolutePaths);
 
     const filePaths = absolutePaths.map((abs) => path.relative(rootPath, abs));
 
