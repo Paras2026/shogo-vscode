@@ -114,13 +114,19 @@ export const TOOL_DEFINITIONS: Record<string, { description: string; parameters:
   },
   runCommand: {
     description:
-      "Run a shell command in the workspace root. Returns stdout, stderr, and exit code. Requires approval for non-safe commands.",
+      "Run a shell command. On Windows uses PowerShell; on Linux/Mac uses persistent shell. " +
+      "Use `cwd` to run in a subdirectory instead of `cd dir && command`. " +
+      "On Windows: NEVER use `&&` or `&` — use `;` to chain commands, or use `cwd` parameter.",
     parameters: {
       type: "object",
       properties: {
         command: {
           type: "string",
           description: "Shell command to execute",
+        },
+        cwd: {
+          type: "string",
+          description: "Working directory (workspace-relative path). Use instead of 'cd'.",
         },
         timeoutMs: {
           type: "number",

@@ -538,6 +538,9 @@ function buildToolProtocol(): string {
     "12. For symbol search across files: use getWorkspaceSymbols. For type info: getSignatureHelp.",
     "13. For understanding class hierarchies: use getTypeHierarchy.",
     "14. For refactoring suggestions: use getCodeActions.",
+    "15. SHELL RULES: On Windows (PowerShell): NEVER use && or &. Use ; to chain commands. Use the cwd parameter of runCommand to run in a subdirectory — do NOT use 'cd dir && command'.",
+    "16. When running commands in a subdirectory: use runCommand with cwd='subdirectory' parameter. Example: runCommand({ command: 'git log', cwd: 'ai-content-creator' }).",
+    "17. Always check the environment section of the system prompt to know which OS/shell you are on before running commands.",
   ].join("\n");
 }
 

@@ -63,14 +63,14 @@ async function executeWindows(
   command: string,
   timeoutMs: number,
   signal?: AbortSignal,
+  cwdOverride?: string,
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   const marker = `__SHOGO_DONE_${Date.now()}__`;
   const wrappedCmd = `try { ${command} } finally { Write-Output "${marker}" }`;
 
-  // Always use powershell.exe, NOT COMSPEC (which is cmd.exe on Windows)
   const shell = "powershell.exe";
   const args = ["-NoProfile", "-NonInteractive", "-Command", wrappedCmd];
-  const cwd = getWorkspaceRootPath() || process.cwd();
+  const cwd = cwdOverride || getWorkspaceRootPath() || process.cwd();
   const env = { ...process.env, ...HEADLESS_ENV };
 
   return new Promise((resolve) => {
@@ -232,23 +232,49 @@ function getShell(): PersistentShell {
 // ── Main Tool ──
 export const runCommandTool: ToolDefinition = {
   name: "runCommand",
-  description: "Run a shell command. On Windows uses PowerShell; on Linux/Mac uses persistent shell (cd persists).",
+  description:
+    "Run a shell command. On Windows uses PowerShell; on Linux/Mac uses persistent shell (cd persists). " +
+    "Use the `cwd` parameter to run commands in a subdirectory WITHOUT using `cd`. " +
+    "IMPORTANT: On Windows, do NOT use bash syntax like `&&` or `&`. Use `;` instead, or run separate commands. " +
+    "Do NOT use `cd dir && command` — use `cwd` parameter instead.",
   inputSchema: {
     type: "object",
     required: ["command"],
     properties: {
       command: { type: "string", description: "Command line to run" },
+      cwd: { type: "string", description: "Working directory (workspace-relative path). Use this instead of 'cd'." },
       timeoutMs: { type: "number", description: "Optional timeout in ms, default 120000" },
     },
   },
   async execute(input, ctx): Promise<ToolResult> {
     if (typeof input.command !== "string") return { ok: false, error: "command must be a string" };
 
-    const command = input.command.trim();
+    let command = input.command.trim();
+
+    // Strip leading `cd <dir> &&` or `cd <dir>;` — use cwd parameter instead
+    const cdPattern = /^\s*cd\s+([^\s&;|]+)\s*[&;|]\s*/i;
+    const cdMatch = command.match(cdPattern);
+    if (cdMatch) {
+      command = command.slice(cdMatch[0].length).trim();
+    }
+
+    // Determine working directory
+    let workingDir: string;
+    const root = getWorkspaceRoot();
+    if (!root) return { ok: false, error: "No workspace folder is open." };
+
+    if (typeof input.cwd === "string" && input.cwd.trim()) {
+      const path = require("path");
+      workingDir = path.join(root.uri.fsPath, input.cwd.trim());
+    } else if (cdMatch) {
+      const path = require("path");
+      workingDir = path.join(root.uri.fsPath, cdMatch[1]);
+    } else {
+      workingDir = root.uri.fsPath;
+    }
     const decision = classifyCommand(command);
     if (decision.action === "block") return { ok: false, error: `Blocked command: ${decision.reason}` };
 
-    const root = getWorkspaceRoot();
     if (!root) return { ok: false, error: "No workspace folder is open." };
     if (!ctx.requestApproval) return { ok: false, error: "Approval UI is unavailable." };
 
@@ -259,7 +285,7 @@ export const runCommandTool: ToolDefinition = {
       description: command,
       primaryAction: "Run Command",
       secondaryAction: "Cancel",
-      details: { cwd: root.uri.fsPath, reason: decision.reason, policy: decision.action },
+      details: { cwd: workingDir, reason: decision.reason, policy: decision.action },
     });
     if (!approved) return { ok: false, error: "User cancelled command." };
 
@@ -276,7 +302,7 @@ export const runCommandTool: ToolDefinition = {
     let result: { stdout: string; stderr: string; code: number };
 
     if (isWindows()) {
-      result = await executeWindows(command, timeoutMs, ctx.signal);
+      result = await executeWindows(command, timeoutMs, ctx.signal, workingDir);
     } else {
       const shell = getShell();
       result = await shell.execute(command, timeoutMs, ctx.signal);

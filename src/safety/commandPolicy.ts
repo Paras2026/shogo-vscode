@@ -15,6 +15,18 @@ const DANGEROUS_PATTERNS = [
 ];
 
 const SAFE_PATTERNS = [
+  // Read-only file system exploration
+  /^\s*(ls|dir|Get-ChildItem|Get-ChildItem\s+-Recurse)\b/i,
+  /^\s*(pwd|Push-Location|Pop-Location)\b/i,
+  /^\s*(cat|type|Get-Content|more|less)\b/i,
+  /^\s*(head|tail)\b/i,
+  /^\s*(wc|Measure-Object)\b/i,
+  /^\s*(which|where\.exe|Get-Command)\b/i,
+  /^\s*(echo|Write-Output|Write-Host)\b/i,
+  /^\s*(Test-Path|Test-File)\b/i,
+  /^\s*(date|Get-Date)\b/i,
+  /^\s*(whoami)\b/i,
+  // Package managers (read-only commands)
   /^\s*npm\s+(test|run\s+(test|lint|build|typecheck|check))\b/i,
   /^\s*pnpm\s+(test|run\s+(test|lint|build|typecheck|check))\b/i,
   /^\s*yarn\s+(test|run\s+(test|lint|build|typecheck|check))\b/i,
@@ -22,8 +34,18 @@ const SAFE_PATTERNS = [
   /^\s*npx\s+tsc\s+--noEmit\b/i,
   /^\s*bunx?\s+tsc\s+--noEmit\b/i,
   /^\s*tsc\s+--noEmit\b/i,
-  /^\s*git\s+(status|diff|log|show)\b/i,
+  // Git read-only commands
+  /^\s*git\s+(status|diff|log|show|branch\s*-a?|remote\s*-v|tag|blame)\b/i,
+  /^\s*git\s+ls-files\b/i,
+  /^\s*git\s+rev-parse\b/i,
+  /^\s*git\s+describe\b/i,
+  // Node/Python read-only
   /^\s*node\s+[-\w./\\]+\b/i,
+  /^\s*python\s+[-\w./\\]+\b/i,
+  /^\s*python3\s+[-\w./\\]+\b/i,
+  // File info (cross-platform)
+  /^\s*(du|df|free|nproc)\b/i,
+  /^\s*(uname)\b/i,
 ];
 
 const RISKY_PATTERNS = [
