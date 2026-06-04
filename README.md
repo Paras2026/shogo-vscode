@@ -1,6 +1,6 @@
 # Shogo — AI Coding Agent for VS Code
 
-A chat sidebar powered by **Shogo Cloud**, embedded directly in VS Code. Shogo reads, edits, searches, and runs commands in your workspace — with your approval.
+A chat sidebar powered by **Shogo Cloud**, embedded directly in VS Code. Shogo reads, edits, searches, runs commands, and analyzes your codebase — with your approval.
 
 ![VS Code](https://img.shields.io/badge/VS%20Code-1.90+-blue?logo=visual-studio-code)
 ![Node](https://img.shields.io/badge/Node.js-18+-green?logo=node.js)
@@ -13,128 +13,129 @@ A chat sidebar powered by **Shogo Cloud**, embedded directly in VS Code. Shogo r
 | Feature | Description |
 |---------|-------------|
 | 💬 **Chat sidebar** | Talk to an AI agent directly in the Activity Bar |
-| 📂 **Read & edit files** | Create, read, and patch files with approval |
-| 🔍 **Search workspace** | Find code by text, regex, or indexed search with context lines |
-| 🖥️ **Run commands** | Execute shell commands with output capture |
-| 🔀 **Git integration** | View git status and diff without leaving VS Code |
-| 📊 **Diagnostics** | Pull VS Code lint/type errors for the active file |
-| 🗂️ **Workspace index** | Lexical code index for fast semantic-like search |
-| ⚙️ **Configurable** | Agent config, rules, max steps, and approval mode |
+| 🤖 **Multiple models** | Switch between Hoshi 1.0, Sonnet 4.6, Claude Sonnet 4.5 |
+| 📂 **Read & edit files** | Create, read, and patch files with line-number support |
+| 🔍 **Search workspace** | Find code by text, regex, or indexed search |
+| 🖥️ **Run commands** | Execute shell commands with safety classification |
+| 🔀 **Git integration** | View git status, diff, and log |
+| 📊 **Diagnostics** | Pull VS Code lint/type errors |
+| 🗂️ **Project map** | Scan entire codebase structure with exported symbols |
+| 🧠 **Call graph** | Build who-calls-who relationships across files |
+| 💥 **Impact analysis** | Find what breaks before changing a function |
+| 💀 **Dead code detection** | Find unused functions to clean up |
+| 📏 **Smart readFile** | Read file sections with line numbers (for 20K+ line files) |
+| 📜 **Chat history** | Sessions persist across reloads with load/delete |
+| ⏱️ **Stream timeout** | 120s timeout prevents hangs on unsupported models |
 | 🔐 **Secure** | API key stored in VS Code `SecretStorage` — never in settings |
-| 🎨 **Theme-aware** | Matches your VS Code light/dark theme |
-| 📝 **Chat history** | Conversations saved to `.shogo/history/` for reference |
 
 ---
 
-## Quick Install (Pre-built)
+## Install
 
-### Option 1 — From a `.vsix` file
+### Option 1 — From a `.vsix` file (easiest)
 
-1. Download `shogo-vscode-0.1.0.vsix` from the [Releases](https://github.com/Paras2026/shogo-vscode/releases) page (or build it yourself — see below)
+1. Download `shogo-vscode-0.1.0.vsix` from the [Releases](https://github.com/Paras2026/shogo-vscode/releases) page
 2. Open VS Code or Cursor
 3. Press `Ctrl+Shift+P` → **Extensions: Install from VSIX...**
 4. Select the `.vsix` file
-5. Reload when prompted (`Ctrl+Shift+P` → **Developer: Reload Window**)
+5. Reload when prompted: `Ctrl+Shift+P` → **Developer: Reload Window**
 
-### Option 2 — From CLI
+Or from terminal:
 
-```bash
+```powershell
 code --install-extension shogo-vscode-0.1.0.vsix --force
 ```
 
-Or for Cursor:
+For Cursor:
 
-```bash
+```powershell
 cursor --install-extension shogo-vscode-0.1.0.vsix --force
 ```
 
----
+### Option 2 — Build from source
 
-## Build from Source
-
-### Prerequisites
-
-- **Node.js 18+** and **npm** (or **bun**)
-- **VS Code 1.90+** or **Cursor**
-- A **Shogo Cloud API key** (starts with `shogo_sk_`)
-
-### Steps
+**Prerequisites:** Node.js 18+, npm
 
 ```bash
 # 1. Clone the repo
 git clone https://github.com/Paras2026/shogo-vscode.git
-cd shogo-vscode/shogo-vscode
+cd shogo-vscode
 
 # 2. Install dependencies
 npm install
 
-# 3. Typecheck
-npm run typecheck
+# 3. Build the extension bundle
+node esbuild.js
 
-# 4. Package the extension
-npm run package
-```
+# 4. Package into .vsix
+npx vsce package --no-dependencies
 
-This produces `shogo-vscode-0.1.0.vsix` in the project folder.
-
-### Install the built extension
-
-```bash
+# 5. Install it
 code --install-extension shogo-vscode-0.1.0.vsix --force
 ```
 
-### Develop mode (F5)
+Then `Ctrl+Shift+P` → **Developer: Reload Window**
 
-```bash
-npm run watch    # starts the bundler in watch mode
+---
+
+## Upgrade
+
+### If you installed from a `.vsix`:
+
+```powershell
+# 1. Pull latest code
+git fetch origin
+git reset --hard origin/master
+
+# 2. Install dependencies (only if package.json changed)
+npm install
+
+# 3. Rebuild
+node esbuild.js
+
+# 4. Repackage
+npx vsce package --no-dependencies
+
+# 5. Reinstall (force overwrites the old version)
+code --install-extension shogo-vscode-0.1.0.vsix --force
 ```
 
-Then open the `shogo-vscode` folder in VS Code and press **F5** to launch the Extension Development Host.
+Then `Ctrl+Shift+P` → **Developer: Reload Window**
+
+### If you installed from VSIX download:
+
+Just download the new `.vsix` from [Releases](https://github.com/Paras2026/shogo-vscode/releases) and run the install command again — the `--force` flag replaces the old version.
 
 ---
 
 ## First-Time Setup
 
-1. Click the **Shogo** icon (⚡) in the Activity Bar
-2. Click **Set API Key** and paste your `shogo_sk_...` key
-3. Start chatting!
+1. Click the **⚡ Shogo** icon in the Activity Bar
+2. Click **Set API Key** and paste your Shogo Cloud API key
+3. Select a model from the dropdown (Hoshi 1.0 is default)
+4. Start chatting!
 
 ---
 
 ## Usage
 
-Open the Shogo sidebar and type a message. Shogo will automatically detect when you need a tool and ask for your approval before making changes.
+Open the Shogo sidebar and type a message. Shogo uses tools automatically and asks for approval before making changes.
 
-### Example prompts
+### Examples
 
 **Read a file:**
 ```
-Read package.json and tell me the extension version.
+Read package.json and tell me the extension version
 ```
 
 **Search code:**
 ```
-Search for ShogoViewProvider with 3 context lines.
-```
-
-**Regex search:**
-```
-Find all TODO comments using regex: /TODO|FIXME/i
-```
-
-**Git status:**
-```
-Show git status.
-```
-
-**Git diff:**
-```
-Show git diff.
+Find all TODO comments in the project
 ```
 
 **Create a file:**
 ```
-Create a test file with "hello world"
+Create a portfolio website in a folder called portfolio with index.html, style.css, and app.js
 ```
 
 **Edit a file:**
@@ -147,38 +148,85 @@ Update the description in package.json to "AI coding agent for VS Code"
 Run "npm audit" and tell me what's wrong
 ```
 
-**List files:**
+**Git status:**
 ```
-List all TypeScript files in src/agent/
-```
-
-**Index and search:**
-```
-Index this workspace, then search for agentLoop
+What's the git status of the workspace?
 ```
 
-**Diagnostics:**
+**Scan the codebase:**
 ```
-Show any errors in the current file
+Show me the project map
+```
+
+**Impact analysis:**
+```
+What would break if I change the streamChat function?
+```
+
+**Dead code:**
+```
+Find any functions that are never called
 ```
 
 ---
 
-## Built-in Tools
+## Built-in Tools (22)
 
-| Tool | What it does |
+### File & Search
+| Tool | Description |
 |------|-------------|
-| `readFile` | Read file contents with line numbers |
+| `readFile` | Read file contents with line numbers and range support |
+| `writeFile` | Create new files |
+| `applyPatch` | Edit files with exact text replacement |
 | `listFiles` | List files matching a glob pattern |
-| `searchWorkspace` | Search code by text or regex with context lines |
-| `applyPatch` | Edit files with exact old/new text replacement |
-| `writeFile` | Create new files or overwrite small files |
-| `runCommand` | Execute shell commands (with approval) |
+| `searchWorkspace` | Search code by text or regex |
+
+### Git
+| Tool | Description |
+|------|-------------|
 | `gitStatus` | Show `git status` output |
 | `gitDiff` | Show `git diff` output |
+| `gitLog` | Show recent commits |
+
+### Execution
+| Tool | Description |
+|------|-------------|
+| `runCommand` | Execute shell commands (with approval) |
 | `getDiagnostics` | Pull VS Code lint/type errors |
-| `indexWorkspace` | Build a lexical code index (FlexSearch) |
-| `searchIndex` | Search the built index |
+
+### Code Intelligence
+| Tool | Description |
+|------|-------------|
+| `codeIndex` | Find where a symbol is defined |
+| `dependencyGraph` | Show what imports what |
+| `projectMap` | Scan codebase structure with symbols |
+
+### Code Graph
+| Tool | Description |
+|------|-------------|
+| `buildCallGraph` | Build who-calls-who relationships |
+| `impactAnalysis` | Find what breaks if you change a function |
+| `deadCode` | Find never-called functions |
+| `callChain` | Trace execution path between two functions |
+
+### Large Codebase
+| Tool | Description |
+|------|-------------|
+| `readFile` | Line-range support (`startLine`/`endLine`) for 20K+ line files |
+| `projectMap` | Lightweight file overview before deep reading |
+| `buildCallGraph` | Graph-based architecture understanding |
+
+---
+
+## Models
+
+| Model | ID | Notes |
+|-------|----|-------|
+| **Hoshi 1.0** | `mimo-v2.5` | Default — Shogo's own model |
+| **Sonnet 4.6** | `claude-sonnet-4-6` | Best for complex tasks |
+| **Claude Sonnet 4.5** | `claude-sonnet-4-5` | Fallback — most reliable |
+
+Switch models using the dropdown above the input field.
 
 ---
 
@@ -188,116 +236,43 @@ Show any errors in the current file
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `shogo.model` | `claude-sonnet-4-5` | Model ID for the Shogo Cloud LLM |
+| `shogo.model` | `mimo-v2.5` | Model ID for the LLM |
 | `shogo.includeActiveFile` | `true` | Send active file/selection as context |
 | `shogo.apiUrl` | `""` | Override API base URL (blank = SDK default) |
-
-### Agent Config (`.shogo/agent.json`)
-
-Create this file in your workspace root to customize agent behavior:
-
-```json
-{
-  "approvalMode": "ask",
-  "maxToolSteps": 16,
-  "preferredSearch": "workspace",
-  "autoIndex": false
-}
-```
-
-| Field | Options | Description |
-|-------|---------|-------------|
-| `approvalMode` | `"ask"` / `"auto"` | Whether tool calls need approval |
-| `maxToolSteps` | `1`–`20` | Max tool calls per conversation turn |
-| `preferredSearch` | `"workspace"` / `"index"` | Default search strategy |
-| `autoIndex` | `true` / `false` | Auto-index workspace on first message |
-
-### Agent Rules (`.shogo/rules.md`)
-
-Add project-specific instructions for Shogo to follow:
-
-```markdown
-# Project Rules
-
-- Always use TypeScript strict mode
-- Prefer named exports over default exports
-- Run `npm run typecheck` before claiming edits are done
-- Never modify files in src/generated/
-```
-
----
-
-## Chat History
-
-Conversations are saved automatically to:
-
-```
-.shogo/history/
-  chat-2025-01-15T10-30-00.json    ← full transcript
-  chat-2025-01-15T10-30-00.md      ← readable markdown
-```
-
-These files are gitignored by default.
-
----
-
-## Remote / SSH / VPS
-
-Shogo works on **Linux, macOS, and Windows** — including remote environments:
-
-- **VS Code Remote SSH** — install the extension on the remote side
-- **Cursor Remote SSH** — same approach, choose "Install in SSH: \<hostname\>"
-- **WSL** — works natively
-
-Shell commands are auto-detected per platform:
-- **Windows** → `cmd.exe /c`
-- **macOS** → `/bin/zsh -c`
-- **Linux** → `/bin/sh -c`
-
----
-
-## Commands
-
-| Command | Description |
-|---------|-------------|
-| `Shogo: Set API Key` | Store or update your Shogo Cloud key |
-| `Shogo: Clear API Key` | Remove the stored key |
-| `Shogo: New Chat` | Reset the conversation |
 
 ---
 
 ## Architecture
 
 ```
-VS Code (extension host)                  Shogo Cloud
+VS Code (extension host)                Shogo Cloud
 ┌──────────────────────────────┐
 │ extension.ts (activate)      │
 │ ShogoViewProvider            │──── streamText ──────▶  LLM gateway
 │   • owns the webview         │◀──── streamed tokens ──┘
-│   • chat history             │
-│   • agent loop               │──── tool calls ──────▶  local workspace
-│ auth.ts (SecretStorage)      │◀──── tool results ────┘
-│ context.ts (workspace)       │
+│   • session persistence      │
+│   • approval flow            │
+│ auth.ts (SecretStorage)      │──── tool calls ──────▶  local workspace
+│ context.ts (system prompt)   │◀──── tool results ────┘
 ├──────────────────────────────┤
 │ agent/                       │
 │   agentLoop.ts    (loop)     │
 │   toolRegistry.ts (tools)    │
-│   types.ts         (types)   │
+│   toolDefinitions.ts (schemas)│
 ├──────────────────────────────┤
-│ tools/                       │
-│   fileTools.ts     (read/    │
-│                     search)  │
-│   editTools.ts     (patch/   │
-│                     write)   │
-│   runCommand.ts    (shell)   │
-│   gitTools.ts      (git)     │
-│   diagnostics.ts   (lint)    │
-│   indexTools.ts    (index)   │
-│   workspace.ts     (utils)   │
+│ tools/ (22 tools)            │
+│   fileTools, editTools,      │
+│   gitTools, runCommand,      │
+│   diagnostics, projectMap,   │
+│   codeGraphTools, codeIndex, │
+│   workspace                  │
+├──────────────────────────────┤
+│ intelligence/                │
+│   codeGraph.ts  (call graph) │
+│   astIndex.ts   (AST index)  │
 ├──────────────────────────────┤
 │ safety/                      │
-│   commandPolicy.ts (block    │
-│                     risky)   │
+│   commandPolicy.ts           │
 └──────────┬───────────────────┘
            │ postMessage bridge
    ┌───────▼────────┐
@@ -306,32 +281,21 @@ VS Code (extension host)                  Shogo Cloud
    └────────────────┘
 ```
 
-The API key lives only in the extension host. The webview never sees it.
-
 ---
 
-## Roadmap
+## Troubleshooting
 
-- [ ] Tree-sitter code parsing for smarter chunking
-- [ ] Semantic embeddings for meaning-based search
-- [ ] Native AI SDK structured tool calling
-- [ ] Git branch/worktree agents
-- [ ] Multi-file edit in one tool call
-- [ ] Inline chat for selected code blocks
-- [ ] Tool result caching
-- [ ] MCP tool server integration
+### "No output generated" error
+Your model may not be supported. Switch to **Claude Sonnet 4.5** in the dropdown and try again.
 
----
+### Extension doesn't appear
+`Ctrl+Shift+P` → **Developer: Reload Window**
 
-## Contributing
+### Tool calls failing
+Open the Output panel: `Ctrl+Shift+P` → **Output** → dropdown → **Shogo Agent**. Check for errors.
 
-1. Fork the repo
-2. Create a branch: `git checkout -b feature/my-feature`
-3. Make your changes
-4. Typecheck: `npm run typecheck`
-5. Package: `npm run package`
-6. Test: `code --install-extension shogo-vscode-0.1.0.vsix --force`
-7. Submit a PR
+### Model hangs with no response
+The extension has a 120-second timeout. If it hangs, check your API key and model selection.
 
 ---
 
