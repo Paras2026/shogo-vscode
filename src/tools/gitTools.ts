@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { spawn } from "child_process";
 import * as os from "os";
 import * as fs from "fs";
+import * as path from "path";
 import type { ToolDefinition, ToolResult } from "../agent/types";
 
 function findGitBinary(): string {
@@ -38,16 +39,25 @@ async function runGit(args: string[], cwd: string, signal?: AbortSignal): Promis
   });
 }
 
-function getCwd(): string {
-  return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+function getCwd(inputCwd?: unknown): string {
+  const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+  if (typeof inputCwd === "string" && inputCwd.trim()) {
+    return path.resolve(root, inputCwd.trim());
+  }
+  return root;
 }
 
 export const gitStatusTool: ToolDefinition = {
   name: "gitStatus",
   description: "Show the working tree status (modified, added, deleted, untracked files).",
-  inputSchema: { type: "object", properties: {} },
-  async execute(_input, ctx): Promise<ToolResult> {
-    const cwd = getCwd();
+  inputSchema: {
+    type: "object",
+    properties: {
+      cwd: { type: "string", description: "Working directory (workspace-relative path). Leave empty for workspace root." },
+    },
+  },
+  async execute(input, ctx): Promise<ToolResult> {
+    const cwd = getCwd(input.cwd);
     const result = await runGit(["status", "--porcelain"], cwd, ctx.signal);
     if (result.code !== 0) {
       return { ok: false, error: result.stderr || "git status failed. Is this a git repository?" };
@@ -71,10 +81,11 @@ export const gitDiffTool: ToolDefinition = {
     properties: {
       staged: { type: "boolean", description: "Show staged changes instead of unstaged" },
       maxLines: { type: "number", description: "Max diff lines to return (default 200)" },
+      cwd: { type: "string", description: "Working directory (workspace-relative path)." },
     },
   },
   async execute(input, ctx): Promise<ToolResult> {
-    const cwd = getCwd();
+    const cwd = getCwd(input.cwd);
     const staged = input.staged === true;
     const maxLines = typeof input.maxLines === "number" ? input.maxLines : 200;
     const args = staged ? ["diff", "--cached", "--stat"] : ["diff", "--stat"];
@@ -109,10 +120,11 @@ export const gitLogTool: ToolDefinition = {
     type: "object",
     properties: {
       count: { type: "number", description: "Number of commits to show (default 10)" },
+      cwd: { type: "string", description: "Working directory (workspace-relative path)." },
     },
   },
   async execute(input, ctx): Promise<ToolResult> {
-    const cwd = getCwd();
+    const cwd = getCwd(input.cwd);
     const count = typeof input.count === "number" ? input.count : 10;
     const result = await runGit(
       ["log", `--max-count=${count}`, "--pretty=format:%h %s (%ar)"],

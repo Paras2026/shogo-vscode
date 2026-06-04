@@ -215,6 +215,9 @@ function walkDir(dirPath: string, depth: number, results: string[]): void {
   if (depth > MAX_DEPTH) return;
   try {
     const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    if (depth === 0) {
+      logDebug(`walkDir: scanning root=${dirPath}, ${entries.length} entries`);
+    }
     for (const entry of entries) {
       if (SKIP_DIRS.has(entry.name)) continue;
 
@@ -233,7 +236,9 @@ function walkDir(dirPath: string, depth: number, results: string[]): void {
         }
       }
     }
-  } catch {}
+  } catch (err) {
+    if (depth === 0) logWarn(`walkDir: failed to read ${dirPath}: ${err}`);
+  }
 }
 
 /**

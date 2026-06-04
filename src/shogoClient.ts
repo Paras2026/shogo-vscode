@@ -314,8 +314,13 @@ function tryParse(str: string): Record<string, unknown> | null {
 }
 
 function isToolCallJson(parsed: Record<string, unknown>): boolean {
+  // Exact match: "type":"tool_call"
   if (typeof parsed.type === "string" && parsed.type === "tool_call") return true;
+  // Any tool_ prefix: "type":"tool_runCommand", "type":"tool_gitLog", etc.
+  if (typeof parsed.type === "string" && parsed.type.startsWith("tool_")) return true;
+  // Explicit tool name
   if (typeof parsed.tool === "string" || typeof parsed.name === "string") return true;
+  // OpenAI-style function call
   if (typeof parsed.function === "object" && parsed.function !== null) return true;
   return false;
 }
@@ -370,9 +375,14 @@ function parseJsonToolCall(text: string): { tool: string; input: Record<string, 
 }
 
 function pickToolName(parsed: Record<string, unknown>): string | undefined {
+  // Standard: { "tool": "gitLog" } or { "name": "gitLog" }
   if (typeof parsed.tool === "string") return parsed.tool;
   if (typeof parsed.name === "string") return parsed.name;
   if (typeof parsed.function === "string") return parsed.function;
+  // type-prefixed: { "type": "tool_runCommand" } → extract "runCommand"
+  if (typeof parsed.type === "string" && parsed.type.startsWith("tool_")) {
+    return parsed.type.slice(5); // Remove "tool_" prefix
+  }
   return undefined;
 }
 

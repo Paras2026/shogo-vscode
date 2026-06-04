@@ -187,7 +187,9 @@ export const TOOL_DEFINITIONS: Record<string, { description: string; parameters:
       "Show the working tree status. Lists modified, added, deleted, and untracked files.",
     parameters: {
       type: "object",
-      properties: {},
+      properties: {
+        cwd: { type: "string", description: "Working directory (workspace-relative path)." },
+      },
     },
   },
   gitDiff: {
@@ -204,6 +206,7 @@ export const TOOL_DEFINITIONS: Record<string, { description: string; parameters:
           type: "number",
           description: "Max diff lines to return. Default 200.",
         },
+        cwd: { type: "string", description: "Working directory (workspace-relative path)." },
       },
     },
   },
@@ -217,6 +220,7 @@ export const TOOL_DEFINITIONS: Record<string, { description: string; parameters:
           type: "number",
           description: "Number of commits to show. Default 10.",
         },
+        cwd: { type: "string", description: "Working directory (workspace-relative path)." },
       },
     },
   },
