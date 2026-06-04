@@ -40,12 +40,15 @@ async function runGit(args: string[], cwd: string, signal?: AbortSignal): Promis
   });
 }
 
-function getCwd(inputCwd?: unknown): string {
+function getCwd(input: Record<string, unknown>): string {
   const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
-  if (typeof inputCwd === "string" && inputCwd.trim()) {
-    const resolved = path.resolve(root, inputCwd.trim());
+  // Accept both "cwd" and "path" as parameter names (LLMs use both)
+  const raw = (typeof input.cwd === "string" && input.cwd.trim())
+    || (typeof input.path === "string" && input.path.trim());
+  if (raw) {
+    const resolved = path.resolve(root, raw);
     if (!resolved.startsWith(root)) {
-      logWarn(`Blocked path traversal: "${inputCwd}" resolved to ${resolved}`);
+      logWarn(`Blocked path traversal: "${raw}" resolved to ${resolved}`);
       return root;
     }
     return resolved;
@@ -63,10 +66,13 @@ export const gitStatusTool: ToolDefinition = {
     },
   },
   async execute(input, ctx): Promise<ToolResult> {
-    const cwd = getCwd(input.cwd);
+    const cwd = getCwd(input);
     const result = await runGit(["status", "--porcelain"], cwd, ctx.signal);
     if (result.code !== 0) {
-      return { ok: false, error: result.stderr || "git status failed. Is this a git repository?" };
+      const hint = result.stderr.includes("not a git repository")
+        ? ` The directory "${cwd}" is not a git repository. Use the cwd parameter to point to a directory that contains a .git folder.`
+        : "";
+      return { ok: false, error: `${result.stderr || "git status failed."}${hint}` };
     }
     if (!result.stdout) {
       return { ok: true, data: { status: "clean", message: "No changes in the working tree." } };
@@ -91,7 +97,7 @@ export const gitDiffTool: ToolDefinition = {
     },
   },
   async execute(input, ctx): Promise<ToolResult> {
-    const cwd = getCwd(input.cwd);
+    const cwd = getCwd(input);
     const staged = input.staged === true;
     const maxLines = typeof input.maxLines === "number" ? input.maxLines : 200;
     const args = staged ? ["diff", "--cached", "--stat"] : ["diff", "--stat"];
@@ -100,7 +106,10 @@ export const gitDiffTool: ToolDefinition = {
     const diffArgs = staged ? ["diff", "--cached"] : ["diff"];
     const diffResult = await runGit(diffArgs, cwd, ctx.signal);
     if (diffResult.code !== 0) {
-      return { ok: false, error: diffResult.stderr || "git diff failed." };
+      const hint = diffResult.stderr.includes("not a git repository")
+        ? ` The directory "${cwd}" is not a git repository. Use the cwd parameter to point to a directory that contains a .git folder.`
+        : "";
+      return { ok: false, error: `${diffResult.stderr || "git diff failed."}${hint}` };
     }
 
     const lines = diffResult.stdout.split("\n");
@@ -130,7 +139,7 @@ export const gitLogTool: ToolDefinition = {
     },
   },
   async execute(input, ctx): Promise<ToolResult> {
-    const cwd = getCwd(input.cwd);
+    const cwd = getCwd(input);
     const count = typeof input.count === "number" ? input.count : 10;
     const result = await runGit(
       ["log", `--max-count=${count}`, "--pretty=format:%h %s (%ar)"],
@@ -138,7 +147,10 @@ export const gitLogTool: ToolDefinition = {
       ctx.signal
     );
     if (result.code !== 0) {
-      return { ok: false, error: result.stderr || "git log failed." };
+      const hint = result.stderr.includes("not a git repository")
+        ? ` The directory "${cwd}" is not a git repository. Use the cwd parameter to point to a directory that contains a .git folder.`
+        : "";
+      return { ok: false, error: `${result.stderr || "git log failed."}${hint}` };
     }
     const commits = result.stdout.split("\n").filter(Boolean).map((line) => {
       const hash = line.slice(0, 7);
