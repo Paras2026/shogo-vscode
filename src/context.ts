@@ -47,9 +47,9 @@ export async function gatherSmartWorkspaceContext(userMessage: string): Promise<
       gatherSmartContext(userMessage, ctx.filePath),
       new Promise<undefined>((resolve) =>
         setTimeout(() => {
-          logWarn("Smart context gathering timed out after 5s — skipping");
+          logWarn("Smart context gathering timed out after 10s — skipping");
           resolve(undefined);
-        }, 5000)
+        }, 10000)
       ),
     ]);
   } catch {
@@ -77,6 +77,17 @@ export function buildSystemPrompt(ctx: WorkspaceContext): string {
     "- impactAnalysis(function): Find what breaks if you change a function",
     "- deadCode: Find unused functions that can be removed",
     "- callChain(from, to): Trace execution path between two functions",
+    "",
+    "## SYNTHESIS RULE (VERY IMPORTANT)",
+    "## SYNTHESIS RULE (VERY IMPORTANT)",
+    "- After reading 3+ files or searching 3+ times, STOP tool calls and write your analysis.",
+    "- You have a maximum of 16 tool calls per turn. After using 10+, prioritize answering over searching.",
+    "- NEVER call the same tool twice with the same parameters.",
+    "- When you have enough information, write a comprehensive response with: summary, relevant code references, and recommended changes.",
+    "- After reading 3+ files or searching 3+ times, STOP tool calls and write your analysis.",
+    "- You have a maximum of 16 tool calls per turn. After using 10+, prioritize answering over searching.",
+    "- NEVER call the same tool twice with the same parameters.",
+    "- When you have enough information, write a comprehensive response with: summary, relevant code references, and recommended changes.",
   ];
 
   if (ctx.workspaceName) {
