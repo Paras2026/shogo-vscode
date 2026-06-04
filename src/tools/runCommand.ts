@@ -115,8 +115,10 @@ class PersistentPowerShell {
 
     return new Promise((resolve) => {
       const marker = `__SHOGO_DONE_${++this.commandId}__`;
+      // Escape ^ for PowerShell (^ is the escape char, git uses it as revision anchor)
+      const psSafe = command.replace(/\^/g, "^^");
       // Capture $LastExitCode in the marker so we know if the command actually failed
-      const wrappedCmd = `try { ${command} } finally { Write-Output "${marker}_EXIT=$LastExitCode" }`;
+      const wrappedCmd = `try { ${psSafe} } finally { Write-Output "${marker}_EXIT=$LastExitCode" }`;
 
       let stdout = "";
       let stderr = "";
