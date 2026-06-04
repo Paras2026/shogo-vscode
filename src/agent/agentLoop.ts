@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { streamChat, type ChatMessage, type StructuredToolCall } from "../shogoClient";
+import { streamChat, stripToolCallsFromText, type ChatMessage, type StructuredToolCall } from "../shogoClient";
 import { logInfo, logError, logDebug, logWarn } from "../logger";
 import { executeTool, getToolDescriptions, validateToolInput } from "./toolRegistry";
 import type { ApprovalRequest, ToolResult } from "./types";
@@ -110,7 +110,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<string> {
 
     if (toolCalls.length === 0) {
       logDebug(`No tool calls. Response text: ${responseText.length} chars`);
-      const cleanedText = stripToolMarkup(responseText);
+      const cleanedText = stripToolCallsFromText(responseText);
 
       if (!correctedFalseSuccess && successfulToolCalls === 0 && looksLikeUnverifiedWorkspaceSuccess(cleanedText)) {
         correctedFalseSuccess = true;
@@ -268,19 +268,11 @@ function buildRetryFeedback(
 }
 
 function looksLikeUnverifiedWorkspaceSuccess(text: string): boolean {
-  const normalized = stripToolMarkup(text).toLowerCase();
+  const normalized = stripToolCallsFromText(text).toLowerCase();
   const successVerb = /\b(created|wrote|updated|modified|changed|edited|deleted|removed|renamed|moved|fixed|ran|executed|installed|applied)\b/;
   const successPhrase = /\b(i('|')?ve|i have|i successfully|successfully|done[,!]?|completed)\b/;
   const workspaceTarget = /\b(file|folder|workspace|project|command|terminal|script|test|package|dependency|diff|patch|code|component|function|class|repo|branch|commit)\b/;
   return successVerb.test(normalized) && (successPhrase.test(normalized) || workspaceTarget.test(normalized));
-}
-
-function stripToolMarkup(text: string): string {
-  return text
-    .replace(/<function_calls>[\s\S]*?<\/function_calls>/gi, "")
-    .replace(/<invoke\b[\s\S]*?<\/invoke>/gi, "")
-    .replace(/```json\s*\{[\s\S]*?\}\s*```/gi, "")
-    .trim();
 }
 
 function formatToolResult(tool: string, result: ToolResult): string {

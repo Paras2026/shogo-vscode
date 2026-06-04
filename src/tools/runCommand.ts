@@ -12,12 +12,41 @@ let outputChannel: vscode.OutputChannel | undefined;
 function getDefaultShell(): string {
   const platform = os.platform();
   if (platform === "win32") {
-    return process.env.COMSPEC || "cmd.exe";
+    const comspec = process.env.COMSPEC;
+    if (comspec) return comspec;
+    const candidates = [
+      "powershell.exe", "pwsh.exe",
+      process.env.SYSTEMROOT ? `${process.env.SYSTEMROOT}\\System32\\cmd.exe` : null,
+      "cmd.exe",
+    ].filter(Boolean) as string[];
+    for (const c of candidates) {
+      try { require("fs").accessSync(c); return c; } catch { continue; }
+    }
+    return "cmd.exe";
   }
   if (platform === "darwin") {
     return process.env.SHELL || "/bin/zsh";
   }
   return process.env.SHELL || "/bin/sh";
+}
+
+function findGitBinary(): string {
+  const platform = os.platform();
+  if (platform === "win32") {
+    try {
+      const { execSync } = require("child_process");
+      return execSync("where git", { encoding: "utf8", timeout: 3000 }).trim().split("\n")[0];
+    } catch {}
+    const candidates = [
+      "git.exe", "git",
+      "C:\\Program Files\\Git\\cmd\\git.exe",
+      "C:\\Program Files (x86)\\Git\\cmd\\git.exe",
+    ];
+    for (const g of candidates) {
+      try { require("fs").accessSync(g); return g; } catch { continue; }
+    }
+  }
+  return "git";
 }
 
 function getOutputChannel(): vscode.OutputChannel {

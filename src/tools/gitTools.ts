@@ -1,10 +1,34 @@
 import * as vscode from "vscode";
 import { spawn } from "child_process";
+import * as os from "os";
+import * as fs from "fs";
 import type { ToolDefinition, ToolResult } from "../agent/types";
+
+function findGitBinary(): string {
+  const platform = os.platform();
+  if (platform === "win32") {
+    try {
+      const { execSync } = require("child_process");
+      const result = execSync("where git", { encoding: "utf8", timeout: 3000 }).trim().split("\n")[0];
+      if (result && fs.existsSync(result)) return result;
+    } catch {}
+    const candidates = [
+      "git.exe", "git",
+      "C:\\Program Files\\Git\\cmd\\git.exe",
+      "C:\\Program Files (x86)\\Git\\cmd\\git.exe",
+    ];
+    for (const g of candidates) {
+      try { fs.accessSync(g); return g; } catch { continue; }
+    }
+  }
+  return "git";
+}
+
+const GIT_BIN = findGitBinary();
 
 async function runGit(args: string[], cwd: string, signal?: AbortSignal): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve) => {
-    const child = spawn("git", args, { cwd, stdio: "pipe", signal });
+    const child = spawn(GIT_BIN, args, { cwd, stdio: "pipe", signal });
     let stdout = "";
     let stderr = "";
     child.stdout?.on("data", (d: Buffer) => (stdout += d.toString()));

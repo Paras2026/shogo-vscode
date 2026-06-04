@@ -180,43 +180,97 @@ async function streamWithTextFallback(
 
 /**
  * Parses tool calls from text as a fallback when native tool_use is unavailable.
- * Handles JSON, JSON in fences, and XML formats.
+ * Supports JSON, JSON in fences, XML, and multiple tool calls per message.
  */
 function parseToolCallsFromText(text: string): StructuredToolCall[] {
   const toolCalls: StructuredToolCall[] = [];
-  const tc = parseSingleToolCall(text);
-  if (tc) {
-    toolCalls.push({
-      toolCallId: `text-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      toolName: tc.tool,
-      input: tc.input,
-    });
-  }
-  return toolCalls;
-}
+  const seen = new Set<string>();
 
-function parseSingleToolCall(text: string): { tool: string; input: Record<string, unknown> } | undefined {
-  const trimmed = text.trim();
-  const candidates = [
-    trimmed,
-    stripJsonFence(trimmed),
-    extractFirstJsonObject(trimmed),
-  ].filter(Boolean) as string[];
-
-  const xmlCall = parseXmlToolCall(trimmed);
-  if (xmlCall) return xmlCall;
-
-  for (const candidate of candidates) {
-    try {
-      const parsed = JSON.parse(candidate) as Record<string, unknown>;
-      const tool = pickToolName(parsed);
-      const input = pickToolInput(parsed);
-      if (tool) return { tool, input };
-    } catch {
-      continue;
+  const xmlCalls = parseAllXmlToolCalls(text);
+  for (const tc of xmlCalls) {
+    const key = `${tc.toolName}:${JSON.stringify(tc.input)}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      toolCalls.push(tc);
     }
   }
 
+  const jsonCalls = parseAllJsonToolCalls(text);
+  for (const tc of jsonCalls) {
+    const key = `${tc.toolName}:${JSON.stringify(tc.input)}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      toolCalls.push(tc);
+    }
+  }
+
+  return toolCalls;
+}
+
+/**
+ * Strips tool call JSON/XML from display text so the user doesn't see raw markup.
+ */
+export function stripToolCallsFromText(text: string): string {
+  let cleaned = text;
+  cleaned = cleaned.replace(/<invoke\b[\s\S]*?<\/invoke>/gi, "");
+  cleaned = cleaned.replace(/```(?:json)?\s*\{[\s\S]*?\}\s*```/gi, "");
+  cleaned = cleaned.replace(/\{"\s*"?type"?\s*:\s*"tool_call"[\s\S]*?\}/g, "");
+  cleaned = cleaned.replace(/<function_calls>[\s\S]*?<\/function_calls>/gi, "");
+  return cleaned.trim();
+}
+
+function parseAllJsonToolCalls(text: string): StructuredToolCall[] {
+  const results: StructuredToolCall[] = [];
+  const regex = /\{"\s*"?type"?\s*:\s*"tool_call"[\s\S]*?\}/g;
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    const tc = parseJsonToolCall(match[0]);
+    if (tc) {
+      results.push({
+        toolCallId: `text-${Date.now()}-${results.length}-${Math.random().toString(36).slice(2)}`,
+        toolName: tc.tool,
+        input: tc.input,
+      });
+    }
+  }
+
+  if (results.length === 0) {
+    const regex2 = /\{[^{}]*"tool"\s*:\s*"([^"]+)"[^{}]*\}/g;
+    while ((match = regex2.exec(text)) !== null) {
+      const tc = parseJsonToolCall(match[0]);
+      if (tc) {
+        results.push({
+          toolCallId: `text-${Date.now()}-${results.length}-${Math.random().toString(36).slice(2)}`,
+          toolName: tc.tool,
+          input: tc.input,
+        });
+      }
+    }
+  }
+
+  return results;
+}
+
+function parseJsonToolCall(text: string): { tool: string; input: Record<string, unknown> } | undefined {
+  const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  const jsonStr = fenceMatch ? fenceMatch[1] : text;
+  try {
+    const parsed = JSON.parse(jsonStr) as Record<string, unknown>;
+    const tool = pickToolName(parsed);
+    const input = pickToolInput(parsed);
+    if (tool) return { tool, input };
+  } catch {
+    const start = jsonStr.indexOf("{");
+    const end = jsonStr.lastIndexOf("}");
+    if (start !== -1 && end > start) {
+      try {
+        const parsed = JSON.parse(jsonStr.slice(start, end + 1)) as Record<string, unknown>;
+        const tool = pickToolName(parsed);
+        const input = pickToolInput(parsed);
+        if (tool) return { tool, input };
+        } catch { /* skip */ }
+    }
+  }
   return undefined;
 }
 
@@ -234,42 +288,30 @@ function pickToolInput(parsed: Record<string, unknown>): Record<string, unknown>
   return {};
 }
 
-function stripJsonFence(text: string): string | undefined {
-  const match = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-  return match?.[1]?.trim();
-}
-
-function extractFirstJsonObject(text: string): string | undefined {
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start === -1 || end === -1 || end <= start) return undefined;
-  return text.slice(start, end + 1);
-}
-
-function parseXmlToolCall(text: string): { tool: string; input: Record<string, unknown> } | undefined {
-  const invoke = text.match(
-    /<invoke\b[^>]*\bname=["']([^"']+)["'][^>]*>([\s\S]*?)<\/invoke>/i
-  );
-  if (!invoke?.[1]) return undefined;
-
-  const input: Record<string, unknown> = {};
-  const body = invoke[2] ?? "";
-  const paramRegex = /<parameter\b[^>]*\bname=["']([^"']+)["'][^>]*>([\s\S]*?)<\/parameter>/gi;
-  let match: RegExpExecArray | null;
-  while ((match = paramRegex.exec(body)) !== null) {
-    input[match[1]] = coerceValue(decodeEntities(match[2].trim()));
+function parseAllXmlToolCalls(text: string): StructuredToolCall[] {
+  const results: StructuredToolCall[] = [];
+  const regex = /<invoke\b[^>]*\bname=["']([^"']+)["'][^>]*>([\s\S]*?)<\/invoke>/gi;
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    const input: Record<string, unknown> = {};
+    const body = match[2] ?? "";
+    const paramRegex = /<parameter\b[^>]*\bname=["']([^"']+)["'][^>]*>([\s\S]*?)<\/parameter>/gi;
+    let pMatch: RegExpExecArray | null;
+    while ((pMatch = paramRegex.exec(body)) !== null) {
+      input[pMatch[1]] = coerceValue(decodeEntities(pMatch[2].trim()));
+    }
+    results.push({
+      toolCallId: `text-${Date.now()}-${results.length}-${Math.random().toString(36).slice(2)}`,
+      toolName: match[1],
+      input,
+    });
   }
-
-  return { tool: invoke[1], input };
+  return results;
 }
 
 function coerceValue(value: string): unknown {
   if (!value) return "";
-  try {
-    return JSON.parse(value);
-  } catch {
-    return value;
-  }
+  try { return JSON.parse(value); } catch { return value; }
 }
 
 function decodeEntities(value: string): string {
