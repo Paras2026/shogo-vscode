@@ -48,6 +48,17 @@ body {
   max-width: 180px;
 }
 
+#header-version {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(127,127,127,0.12);
+  color: var(--vscode-descriptionForeground);
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+}
+
 #history-btn {
   background: transparent;
   border: 1px solid var(--vscode-panel-border, rgba(127,127,127,0.3));

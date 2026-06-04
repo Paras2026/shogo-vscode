@@ -1,4 +1,6 @@
 import * as vscode from "vscode";
+import * as fs from "fs";
+import * as path from "path";
 import { getApiKey, setApiKey } from "./auth";
 import { runAgentLoop } from "./agent/agentLoop";
 import type { ApprovalRequest } from "./agent/types";
@@ -378,6 +380,7 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
       vscode.Uri.joinPath(this.context.extensionUri, "media", "main.css")
     );
     const nonce = getNonce();
+    const version = getExtensionVersion(this.context.extensionUri);
 
     return /* html */ `<!DOCTYPE html>
 <html lang="en">
@@ -395,6 +398,7 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
   <div id="header">
     <div id="header-left">
       <span id="header-logo">⚡ Shogo</span>
+      <span id="header-version">v${version}</span>
     </div>
     <div style="display:flex;gap:4px;align-items:center;">
       <button id="history-btn" title="Chat History">☰</button>
@@ -436,4 +440,15 @@ function getNonce(): string {
     text += possible.charAt(Math.floor(Math.random() * possible.length));
   }
   return text;
+}
+
+function getExtensionVersion(extensionUri: vscode.Uri): string {
+  try {
+    const pkgPath = path.join(extensionUri.fsPath, "package.json");
+    const raw = fs.readFileSync(pkgPath, "utf-8");
+    const pkg = JSON.parse(raw);
+    return pkg.version ?? "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
 }
