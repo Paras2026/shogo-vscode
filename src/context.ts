@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { gatherSmartContext, type SmartContextResult } from "./context/smartContext";
-import { logWarn } from "./logger";
+import { logWarn, logDebug } from "./logger";
 
 export interface WorkspaceContext {
   workspaceName?: string;
@@ -13,6 +13,10 @@ export interface WorkspaceContext {
 
 const MAX_FILE_CHARS = 8000;
 const MAX_SELECTION_CHARS = 4000;
+
+// Cache: smart context only needs to run once per workspace session
+let cachedSmartContext: SmartContextResult | undefined = undefined;
+let smartContextFetched = false;
 
 export async function gatherContext(): Promise<WorkspaceContext> {
   const ctx: WorkspaceContext = {};
@@ -42,16 +46,29 @@ export async function gatherContext(): Promise<WorkspaceContext> {
 export async function gatherSmartWorkspaceContext(userMessage: string): Promise<WorkspaceContext> {
   const ctx = await gatherContext();
 
+  // Return cached result if already fetched (project structure doesn't change between messages)
+  if (smartContextFetched) {
+    ctx.smartContext = cachedSmartContext;
+    return ctx;
+  }
+
   try {
     ctx.smartContext = await Promise.race([
       gatherSmartContext(userMessage, ctx.filePath),
       new Promise<undefined>((resolve) =>
         setTimeout(() => {
-          logWarn("Smart context gathering timed out after 10s — skipping");
+          logWarn("Smart context gathering timed out after 2s — skipping");
           resolve(undefined);
-        }, 10000)
+        }, 2000)
       ),
     ]);
+
+    // Cache the result so subsequent messages don't wait
+    if (ctx.smartContext) {
+      cachedSmartContext = ctx.smartContext;
+      smartContextFetched = true;
+      logDebug("Smart context cached for session");
+    }
   } catch {
     ctx.smartContext = undefined;
   }

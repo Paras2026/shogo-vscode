@@ -477,14 +477,15 @@ function buildToolProtocol(): string {
     "",
     `Available tools: ${toolNames}`,
     "",
-    "RULES:",
-    "1. Output ONLY valid JSON. No markdown fences, no explanation.",
-    "2. Use tools to inspect files. Never guess contents.",
-    "3. For edits: readFile first, then applyPatch with SEARCH/REPLACE.",
-    "4. For symbol lookup: prefer findReferences/goToDefinition over searchWorkspace.",
-    "5. After enough exploration, write your analysis. Don't keep searching forever.",
-    "6. NEVER repeat the same tool call with identical parameters.",
-    "7. Reference specific files and line numbers in your answer.",
+    "IMPORTANT RULES:",
+    "1. Output ONLY valid JSON. No markdown fences, no explanation before or after.",
+    "2. Each tool call is ONE JSON object on its own line. Output multiple tool calls as separate lines.",
+    "3. Use tools to inspect files. Never guess file contents.",
+    "4. For edits: readFile first, then applyPatch with SEARCH/REPLACE.",
+    "5. For symbol lookup: prefer findReferences/goToDefinition over searchWorkspace.",
+    "6. After enough exploration, write your analysis. Don't keep searching forever.",
+    "7. NEVER repeat the same tool call with identical parameters.",
+    "8. Reference specific files and line numbers in your answer.",
   ].join("\n");
 }
 

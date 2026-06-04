@@ -408,6 +408,7 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
     <div class="composer-top">
       <select id="model-select">
         <option value="mimo-v2.5">Hoshi 1.0</option>
+        <option value="hoshi-1.0">Hoshi 1.0 (alt ID)</option>
         <option value="claude-sonnet-4-6">Sonnet 4.6</option>
         <option value="claude-sonnet-4-5">Claude Sonnet 4.5</option>
       </select>

@@ -29,7 +29,8 @@ export interface StreamOptions {
   signal?: AbortSignal;
 }
 
-let nativeToolUseFailed = false;
+// Per-model tracking: each model gets its own native tool_use flag
+const nativeToolUseFailedByModel = new Set<string>();
 
 const STREAM_TIMEOUT_MS = 120000;
 
@@ -53,7 +54,8 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
  */
 function validateModel(model: string): string {
   const known = [
-    "mimo-v2.5", "claude-sonnet-4-6", "claude-sonnet-4-5",
+    "mimo-v2.5", "hoshi-1.0", "hoshi",
+    "claude-sonnet-4-6", "claude-sonnet-4-5",
     "claude-haiku-4-5-20251001", "gpt-4o", "gpt-4o-mini",
   ];
   if (!known.some((k) => model.includes(k))) {
@@ -80,7 +82,7 @@ export async function streamChat(opts: StreamOptions): Promise<StreamResult> {
     content: m.content,
   }));
 
-  if (!nativeToolUseFailed) {
+  if (!nativeToolUseFailedByModel.has(model)) {
     try {
       logDebug("Attempting native tool_use stream...");
       const result = await withTimeout(
@@ -89,8 +91,8 @@ export async function streamChat(opts: StreamOptions): Promise<StreamResult> {
         "native tool_use"
       );
       if (result.text.length === 0 && result.toolCalls.length === 0) {
-        logWarn("Native tool_use returned empty — switching to text mode permanently");
-        nativeToolUseFailed = true;
+        logWarn(`Native tool_use returned empty for "${model}" — switching to text mode for this model`);
+        nativeToolUseFailedByModel.add(model);
         return withTimeout(
           streamWithTextFallback(provider, model, coreMessages, opts),
           STREAM_TIMEOUT_MS,
@@ -109,9 +111,11 @@ export async function streamChat(opts: StreamOptions): Promise<StreamResult> {
       return result;
     } catch (nativeError: unknown) {
       const msg = nativeError instanceof Error ? nativeError.message : String(nativeError);
-      logWarn(`Native tool_use failed: ${msg} — switching to text mode permanently`);
-      nativeToolUseFailed = true;
+      logWarn(`Native tool_use failed for "${model}": ${msg} — switching to text mode for this model`);
+      nativeToolUseFailedByModel.add(model);
     }
+  } else {
+    logDebug(`Skipping native tool_use for "${model}" (previously failed) — using text fallback`);
   }
 
   return withTimeout(
