@@ -123,6 +123,22 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<string> {
         continue;
       }
 
+      const orphanChars = cleanedText.replace(/^[{}\s,]+|[{}\s,]+$/g, "");
+      if (orphanChars.length === 0 && responseText.includes("tool_call")) {
+        logWarn(`Response was entirely a tool call that wasn't parsed. Raw: ${responseText.slice(0, 200)}`);
+        messages.push({ role: "assistant", content: responseText });
+        messages.push({
+          role: "user",
+          content: [
+            "Your tool call was malformed and could not be parsed.",
+            "Output ONLY the raw JSON object — no text before or after.",
+            `Format: {"type":"tool_call","tool":"<name>","input":{...}}`,
+            `Available tools: ${getToolNames().join(", ")}`,
+          ].join("\n"),
+        });
+        continue;
+      }
+
       opts.onFinalToken?.(cleanedText);
       return cleanedText;
     }
@@ -222,18 +238,23 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<string> {
 }
 
 function buildToolProtocol(): string {
+  const toolNames = getToolNames().join(", ");
   return [
-    "TOOL CALLING RULES:",
-    "1. To use a tool, output ONLY a JSON object with this exact format:",
-    '   {"type":"tool_call","tool":"<toolName>","input":{...}}',
-    "2. Do NOT wrap the JSON in code fences or add any text before/after it.",
-    "3. You MUST call tools to inspect or modify files. Never guess file contents.",
-    "4. For edits: first read the file with readFile, then use applyPatch with the EXACT oldText.",
-    "5. For new files: use writeFile with the complete content.",
-    "6. If a tool fails, fix your parameters and try again.",
+    "━━━ TOOL CALLING FORMAT ━━━",
+    "You have access to tools. When you need to use a tool, output ONLY a JSON object — nothing else:",
     "",
-    "AVAILABLE TOOLS:",
-    getToolDescriptions(),
+    '{"type":"tool_call","tool":"readFile","input":{"path":"src/index.ts"}}',
+    '{"type":"tool_call","tool":"searchWorkspace","input":{"query":"export function"}}',
+    '{"type":"tool_call","tool":"runCommand","input":{"command":"ls -la"}}',
+    '{"type":"tool_call","tool":"applyPatch","input":{"path":"src/index.ts","oldText":"old","newText":"new"}}',
+    "",
+    "CRITICAL RULES:",
+    "1. Output ONLY the JSON object. No markdown fences, no explanation before/after.",
+    "2. The JSON must be valid with nested braces properly closed.",
+    '3. Available tools: ' + toolNames,
+    "4. You MUST use tools. Never describe what you would do — actually do it with a tool.",
+    "5. For edits: readFile first, then applyPatch with the EXACT oldText.",
+    "6. One tool call per response. After the tool result, call the next tool.",
   ].join("\n");
 }
 

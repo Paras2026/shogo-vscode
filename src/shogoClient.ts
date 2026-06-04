@@ -209,42 +209,130 @@ function parseToolCallsFromText(text: string): StructuredToolCall[] {
 
 /**
  * Strips tool call JSON/XML from display text so the user doesn't see raw markup.
+ * Uses brace-depth scanning to handle nested JSON properly.
  */
 export function stripToolCallsFromText(text: string): string {
   let cleaned = text;
   cleaned = cleaned.replace(/<invoke\b[\s\S]*?<\/invoke>/gi, "");
-  cleaned = cleaned.replace(/```(?:json)?\s*\{[\s\S]*?\}\s*```/gi, "");
-  cleaned = cleaned.replace(/\{"\s*"?type"?\s*:\s*"tool_call"[\s\S]*?\}/g, "");
   cleaned = cleaned.replace(/<function_calls>[\s\S]*?<\/function_calls>/gi, "");
-  return cleaned.trim();
+  cleaned = cleaned.replace(/```(?:json)?\s*[\s\S]*?```/gi, "");
+  cleaned = removeJsonToolCalls(cleaned);
+  return cleaned.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/**
+ * Finds complete JSON objects using brace-depth counting and removes those
+ * that look like tool calls (have "type":"tool_call" or "tool":"...").
+ */
+function removeJsonToolCalls(text: string): string {
+  let result = "";
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] === "{") {
+      const obj = extractJsonObject(text, i);
+      if (obj !== null) {
+        const parsed = tryParse(obj);
+        if (parsed && isToolCallJson(parsed)) {
+          i += obj.length;
+          continue;
+        }
+        result += text[i];
+        i++;
+      } else {
+        result += text[i];
+        i++;
+      }
+    } else {
+      result += text[i];
+      i++;
+    }
+  }
+  return result;
+}
+
+/**
+ * Extracts a complete JSON object starting at position `start` using brace counting.
+ * Returns the raw string or null if the object is incomplete/invalid.
+ */
+function extractJsonObject(text: string, start: number): string | null {
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escape = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (ch === "{") depth++;
+    if (ch === "}") {
+      depth--;
+      if (depth === 0) {
+        return text.slice(start, i + 1);
+      }
+    }
+  }
+  return null;
+}
+
+function tryParse(str: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(str);
+    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {}
+  return null;
+}
+
+function isToolCallJson(parsed: Record<string, unknown>): boolean {
+  if (typeof parsed.type === "string" && parsed.type === "tool_call") return true;
+  if (typeof parsed.tool === "string" || typeof parsed.name === "string") return true;
+  if (typeof parsed.function === "object" && parsed.function !== null) return true;
+  return false;
 }
 
 function parseAllJsonToolCalls(text: string): StructuredToolCall[] {
   const results: StructuredToolCall[] = [];
-  const regex = /\{"\s*"?type"?\s*:\s*"tool_call"[\s\S]*?\}/g;
-  let match;
-  while ((match = regex.exec(text)) !== null) {
-    const tc = parseJsonToolCall(match[0]);
-    if (tc) {
-      results.push({
-        toolCallId: `text-${Date.now()}-${results.length}-${Math.random().toString(36).slice(2)}`,
-        toolName: tc.tool,
-        input: tc.input,
-      });
-    }
-  }
+  const seen = new Set<string>();
+  let i = 0;
 
-  if (results.length === 0) {
-    const regex2 = /\{[^{}]*"tool"\s*:\s*"([^"]+)"[^{}]*\}/g;
-    while ((match = regex2.exec(text)) !== null) {
-      const tc = parseJsonToolCall(match[0]);
-      if (tc) {
-        results.push({
-          toolCallId: `text-${Date.now()}-${results.length}-${Math.random().toString(36).slice(2)}`,
-          toolName: tc.tool,
-          input: tc.input,
-        });
+  while (i < text.length) {
+    if (text[i] === "{") {
+      const obj = extractJsonObject(text, i);
+      if (obj !== null) {
+        const parsed = tryParse(obj);
+        if (parsed) {
+          const tool = pickToolName(parsed);
+          const input = pickToolInput(parsed);
+          if (tool) {
+            const key = `${tool}:${JSON.stringify(input)}`;
+            if (!seen.has(key)) {
+              seen.add(key);
+              results.push({
+                toolCallId: `text-${Date.now()}-${results.length}-${Math.random().toString(36).slice(2)}`,
+                toolName: tool,
+                input,
+              });
+            }
+          }
+        }
+        i += obj.length;
+      } else {
+        i++;
       }
+    } else {
+      i++;
     }
   }
 
@@ -254,22 +342,11 @@ function parseAllJsonToolCalls(text: string): StructuredToolCall[] {
 function parseJsonToolCall(text: string): { tool: string; input: Record<string, unknown> } | undefined {
   const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
   const jsonStr = fenceMatch ? fenceMatch[1] : text;
-  try {
-    const parsed = JSON.parse(jsonStr) as Record<string, unknown>;
+  const parsed = tryParse(jsonStr);
+  if (parsed) {
     const tool = pickToolName(parsed);
     const input = pickToolInput(parsed);
     if (tool) return { tool, input };
-  } catch {
-    const start = jsonStr.indexOf("{");
-    const end = jsonStr.lastIndexOf("}");
-    if (start !== -1 && end > start) {
-      try {
-        const parsed = JSON.parse(jsonStr.slice(start, end + 1)) as Record<string, unknown>;
-        const tool = pickToolName(parsed);
-        const input = pickToolInput(parsed);
-        if (tool) return { tool, input };
-        } catch { /* skip */ }
-    }
   }
   return undefined;
 }
