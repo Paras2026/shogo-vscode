@@ -77,7 +77,7 @@ export const TOOL_DEFINITIONS: Record<string, { description: string; parameters:
   },
   applyPatch: {
     description:
-      "Replace an exact text block in a file. You MUST read the file first with readFile to get the exact oldText. Shows a diff and requires approval.",
+      "Edit a file using SEARCH/REPLACE blocks. Use format: <<<<<<< SEARCH\nold code\n=======\nnew code\n>>>>>>> REPLACE. You can have multiple blocks. Read the file first.",
     parameters: {
       type: "object",
       properties: {
@@ -85,17 +85,13 @@ export const TOOL_DEFINITIONS: Record<string, { description: string; parameters:
           type: "string",
           description: "Workspace-relative file path",
         },
-        oldText: {
+        patch: {
           type: "string",
           description:
-            "Exact existing text to replace. Must match the file content character-for-character.",
-        },
-        newText: {
-          type: "string",
-          description: "Replacement text",
+            "SEARCH/REPLACE blocks: <<<<<<< SEARCH\\nexact old text\\n=======\\nnew text\\n>>>>>>> REPLACE",
         },
       },
-      required: ["path", "oldText", "newText"],
+      required: ["path", "patch"],
     },
   },
   writeFile: {
@@ -300,6 +296,56 @@ export const TOOL_DEFINITIONS: Record<string, { description: string; parameters:
         },
       },
       required: ["from", "to"],
+    },
+  },
+  findReferences: {
+    description:
+      "Find all references to a symbol using VS Code's Language Server. Works for any language with an LSP installed.",
+    parameters: {
+      type: "object",
+      properties: {
+        symbol: { type: "string", description: "Symbol name to find references for" },
+        file: { type: "string", description: "File where the symbol is defined" },
+        line: { type: "number", description: "Line where the symbol appears (1-based)" },
+      },
+      required: ["symbol", "file"],
+    },
+  },
+  goToDefinition: {
+    description:
+      "Go to the definition of a symbol. Returns the file and line where it's defined.",
+    parameters: {
+      type: "object",
+      properties: {
+        symbol: { type: "string", description: "Symbol name" },
+        file: { type: "string", description: "File where the symbol is used" },
+        line: { type: "number", description: "Line number (1-based)" },
+      },
+      required: ["symbol", "file"],
+    },
+  },
+  getSymbolInfo: {
+    description:
+      "Get type information and docs for a symbol using VS Code's hover provider.",
+    parameters: {
+      type: "object",
+      properties: {
+        symbol: { type: "string", description: "Symbol name" },
+        file: { type: "string", description: "File where the symbol appears" },
+        line: { type: "number", description: "Line number (1-based)" },
+      },
+      required: ["symbol", "file"],
+    },
+  },
+  getDocumentSymbols: {
+    description:
+      "List all symbols (functions, classes, types) in a file using VS Code's LSP. Returns structured outline with line numbers.",
+    parameters: {
+      type: "object",
+      properties: {
+        file: { type: "string", description: "Workspace-relative file path" },
+      },
+      required: ["file"],
     },
   },
 };

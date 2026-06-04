@@ -7,6 +7,7 @@ import { codeIndexTool, dependencyGraphTool } from "../tools/codeIndexTools";
 import { gitStatusTool, gitDiffTool, gitLogTool } from "../tools/gitTools";
 import { projectMapTool } from "../tools/projectMap";
 import { buildCallGraphTool, impactAnalysisTool, deadCodeTool, callChainTool } from "../tools/codeGraphTools";
+import { findReferencesTool, goToDefinitionTool, getSymbolInfoTool, getDocumentSymbolsTool } from "../tools/lspTools";
 import { logInfo, logError } from "../logger";
 
 const toolList: ToolDefinition[] = [
@@ -27,6 +28,10 @@ const toolList: ToolDefinition[] = [
   impactAnalysisTool,
   deadCodeTool,
   callChainTool,
+  findReferencesTool,
+  goToDefinitionTool,
+  getSymbolInfoTool,
+  getDocumentSymbolsTool,
 ];
 
 const tools = new Map(toolList.map((tool) => [tool.name, tool]));
@@ -35,7 +40,7 @@ const REQUIRED_PARAMS: Record<string, string[]> = {
   readFile: ["path"],
   listFiles: [],
   searchWorkspace: ["query"],
-  applyPatch: ["path", "oldText", "newText"],
+  applyPatch: ["path", "patch"],
   writeFile: ["path", "content"],
   runCommand: ["command"],
   getDiagnostics: [],
@@ -49,13 +54,17 @@ const REQUIRED_PARAMS: Record<string, string[]> = {
   impactAnalysis: ["function"],
   deadCode: [],
   callChain: ["from", "to"],
+  findReferences: ["symbol", "file"],
+  goToDefinition: ["symbol", "file"],
+  getSymbolInfo: ["symbol", "file"],
+  getDocumentSymbols: ["file"],
 };
 
 const PARAM_TYPES: Record<string, Record<string, "string" | "number" | "boolean">> = {
   readFile: { path: "string", startLine: "number", endLine: "number", maxChars: "number" },
   listFiles: { pattern: "string", max: "number" },
   searchWorkspace: { query: "string", pattern: "string", maxFiles: "number", maxMatches: "number" },
-  applyPatch: { path: "string", oldText: "string", newText: "string" },
+  applyPatch: { path: "string", patch: "string" },
   writeFile: { path: "string", content: "string" },
   runCommand: { command: "string", timeoutMs: "number" },
   getDiagnostics: { max: "number" },
@@ -69,6 +78,10 @@ const PARAM_TYPES: Record<string, Record<string, "string" | "number" | "boolean"
   impactAnalysis: { function: "string", depth: "number" },
   deadCode: {},
   callChain: { from: "string", to: "string", maxDepth: "number" },
+  findReferences: { symbol: "string", file: "string", line: "number" },
+  goToDefinition: { symbol: "string", file: "string", line: "number" },
+  getSymbolInfo: { symbol: "string", file: "string", line: "number" },
+  getDocumentSymbols: { file: "string" },
 };
 
 /**

@@ -1,64 +1,128 @@
+import * as fs from "fs";
+import * as path from "path";
 import * as vscode from "vscode";
 import type { ToolDefinition, ToolExecutionContext, ToolResult } from "../agent/types";
-import { normalizeRelativePath, resolveWorkspacePath, truncateText } from "./workspace";
+import { normalizeRelativePath, resolveAbsolutePath, truncateText } from "./workspace";
 
+/**
+ * Unified Diff Editing — SEARCH/REPLACE blocks.
+ * The LLM outputs blocks like:
+ *   <<<<<<< SEARCH
+ *   exact old code
+ *   =======
+ *   new replacement code
+ *   >>>>>>> REPLACE
+ *
+ * Multiple blocks can appear in one call. Each block is applied sequentially.
+ * This is the same format used by Aider, Cursor, and Windsurf.
+ */
 export const applyPatchTool: ToolDefinition = {
   name: "applyPatch",
-  description: "Replace exact oldText with newText in a workspace file after showing a VS Code diff and asking for approval.",
+  description:
+    "Edit a file using SEARCH/REPLACE blocks. Use this format:\n" +
+    "<<<<<<< SEARCH\nexact old code to find\n=======\nnew replacement code\n>>>>>>> REPLACE\n\n" +
+    "You can include multiple blocks. Each block must match the file EXACTLY. Read the file first with readFile.",
   inputSchema: {
     type: "object",
-    required: ["path", "oldText", "newText"],
+    required: ["path", "patch"],
     properties: {
       path: { type: "string", description: "Workspace-relative file path" },
-      oldText: { type: "string", description: "Exact existing text to replace" },
-      newText: { type: "string", description: "Replacement text" },
+      patch: {
+        type: "string",
+        description:
+          "One or more SEARCH/REPLACE blocks separated by newlines. " +
+          "Each block: <<<<<<< SEARCH\\n<exact old text>\\n=======\\n<new text>\\n>>>>>>> REPLACE",
+      },
     },
   },
   async execute(input, ctx): Promise<ToolResult> {
-    if (typeof input.path !== "string" || typeof input.oldText !== "string" || typeof input.newText !== "string") {
-      return { ok: false, error: "path, oldText, and newText must be strings" };
+    if (typeof input.path !== "string" || typeof input.patch !== "string") {
+      return { ok: false, error: "path and patch must be strings" };
     }
 
     const rel = normalizeRelativePath(input.path);
-    const uri = resolveWorkspacePath(rel);
-    const doc = await vscode.workspace.openTextDocument(uri);
-    const current = doc.getText();
-    const index = current.indexOf(input.oldText);
-    if (index === -1) {
-      return { ok: false, error: "oldText was not found exactly in the target file." };
-    }
-    if (current.indexOf(input.oldText, index + input.oldText.length) !== -1) {
-      return { ok: false, error: "oldText is not unique. Provide more surrounding context." };
+    const absPath = resolveAbsolutePath(rel);
+
+    // Read current file content
+    let current: string;
+    let exists = true;
+    try {
+      current = await fs.promises.readFile(absPath, "utf-8");
+    } catch {
+      exists = false;
+      current = "";
     }
 
-    const next = `${current.slice(0, index)}${input.newText}${current.slice(index + input.oldText.length)}`;
-    ctx.postActivity?.(`Previewing edit: ${rel}`);
-    const approved = await previewAndApprove(ctx, uri, rel, next, "Apply Shogo edit", "Replace exact text block");
-    if (!approved) {
-      return { ok: false, error: "User rejected edit." };
+    // Parse SEARCH/REPLACE blocks
+    const blocks = parseSearchReplaceBlocks(input.patch);
+    if (blocks.length === 0) {
+      return { ok: false, error: "No valid SEARCH/REPLACE blocks found. Use the format:\n<<<<<<< SEARCH\nold code\n=======\nnew code\n>>>>>>> REPLACE" };
     }
 
-    const edit = new vscode.WorkspaceEdit();
-    const fullRange = new vscode.Range(doc.positionAt(0), doc.positionAt(current.length));
-    edit.replace(uri, fullRange, next);
-    const ok = await vscode.workspace.applyEdit(edit);
-    if (!ok) {
-      return { ok: false, error: "VS Code rejected the workspace edit." };
+    // Apply each block sequentially
+    let modified = current;
+    const appliedBlocks: string[] = [];
+    const failedBlocks: string[] = [];
+
+    for (let i = 0; i < blocks.length; i++) {
+      const block = blocks[i];
+      const idx = modified.indexOf(block.search);
+
+      if (idx === -1) {
+        failedBlocks.push(`Block ${i + 1}: SEARCH text not found in file`);
+        continue;
+      }
+
+      // Check uniqueness (warn but allow if multiple matches)
+      const secondIdx = modified.indexOf(block.search, idx + block.search.length);
+      if (secondIdx !== -1) {
+        failedBlocks.push(`Block ${i + 1}: SEARCH text is not unique (${countOccurrences(modified, block.search)} matches). Add more context.`);
+        continue;
+      }
+
+      modified = modified.slice(0, idx) + block.replace + modified.slice(idx + block.search.length);
+      appliedBlocks.push(`Block ${i + 1}: applied`);
     }
-    await doc.save();
-    return { ok: true, data: { path: rel, changed: true } };
+
+    if (failedBlocks.length > 0 && appliedBlocks.length === 0) {
+      return { ok: false, error: `All blocks failed:\n${failedBlocks.join("\n")}` };
+    }
+
+    // Show diff and request approval
+    if (ctx.requestApproval && exists) {
+      const approved = await showDiffApproval(ctx, absPath, rel, current, modified);
+      if (!approved) {
+        return { ok: false, error: "User rejected the edit." };
+      }
+    }
+
+    // Write the file
+    await fs.promises.mkdir(path.dirname(absPath), { recursive: true });
+    await fs.promises.writeFile(absPath, modified, "utf-8");
+
+    const result: Record<string, unknown> = {
+      path: rel,
+      changed: true,
+      blocksApplied: appliedBlocks.length,
+      created: !exists,
+    };
+    if (failedBlocks.length > 0) {
+      result.warnings = failedBlocks;
+    }
+
+    return { ok: true, data: result };
   },
 };
 
 export const writeFileTool: ToolDefinition = {
   name: "writeFile",
-  description: "Create or replace a workspace text file after showing a diff and asking for approval.",
+  description: "Create or fully replace a file. Shows a diff and requires approval.",
   inputSchema: {
     type: "object",
     required: ["path", "content"],
     properties: {
       path: { type: "string", description: "Workspace-relative file path" },
-      content: { type: "string", description: "New full file content" },
+      content: { type: "string", description: "Full file content" },
     },
   },
   async execute(input, ctx): Promise<ToolResult> {
@@ -67,81 +131,104 @@ export const writeFileTool: ToolDefinition = {
     }
 
     const rel = normalizeRelativePath(input.path);
-    const uri = resolveWorkspacePath(rel);
+    const absPath = resolveAbsolutePath(rel);
+
     let current = "";
     let exists = true;
     try {
-      current = Buffer.from(await vscode.workspace.fs.readFile(uri)).toString("utf8");
+      current = await fs.promises.readFile(absPath, "utf-8");
     } catch {
       exists = false;
     }
 
-    ctx.postActivity?.(`${exists ? "Previewing file replacement" : "Previewing new file"}: ${rel}`);
-    const approved = await previewAndApprove(
-      ctx,
-      uri,
-      rel,
-      input.content,
-      exists ? "Apply Shogo file update" : "Create Shogo file",
-      exists ? "Replace full file content" : "Create new file"
-    );
-    if (!approved) {
-      return { ok: false, error: "User rejected file write." };
+    if (ctx.requestApproval && exists) {
+      const approved = await showDiffApproval(ctx, absPath, rel, current, input.content);
+      if (!approved) {
+        return { ok: false, error: "User rejected file write." };
+      }
     }
 
-    if (exists) {
-      const doc = await vscode.workspace.openTextDocument(uri);
-      const edit = new vscode.WorkspaceEdit();
-      const fullRange = new vscode.Range(doc.positionAt(0), doc.positionAt(current.length));
-      edit.replace(uri, fullRange, input.content);
-      const ok = await vscode.workspace.applyEdit(edit);
-      if (!ok) {
-        return { ok: false, error: "VS Code rejected the workspace edit." };
-      }
-      await doc.save();
-    } else {
-      await vscode.workspace.fs.writeFile(uri, Buffer.from(input.content, "utf8"));
-    }
+    await fs.promises.mkdir(path.dirname(absPath), { recursive: true });
+    await fs.promises.writeFile(absPath, input.content, "utf-8");
 
     return { ok: true, data: { path: rel, changed: true, created: !exists } };
   },
 };
 
-async function previewAndApprove(
-  ctx: ToolExecutionContext,
-  originalUri: vscode.Uri,
-  relativePath: string,
-  nextContent: string,
-  actionLabel: string,
-  changeType: string
-): Promise<boolean> {
-  if (!ctx.requestApproval) {
-    return false;
-  }
+// ── Helpers ──
 
-  await vscode.workspace.fs.createDirectory(ctx.extensionContext.globalStorageUri);
-  const safeName = relativePath.replace(/[\\/:*?"<>|]/g, "_");
-  const previewUri = vscode.Uri.joinPath(ctx.extensionContext.globalStorageUri, `preview-${Date.now()}-${safeName}`);
-  await vscode.workspace.fs.writeFile(previewUri, Buffer.from(nextContent, "utf8"));
-  await vscode.commands.executeCommand("vscode.diff", originalUri, previewUri, `Shogo edit preview: ${relativePath}`);
-
-  return ctx.requestApproval({
-    id: createApprovalId("edit"),
-    kind: "edit",
-    title: "Apply edit?",
-    description: `Review the opened diff for ${relativePath}.`,
-    primaryAction: actionLabel,
-    secondaryAction: "Reject",
-    details: {
-      file: relativePath,
-      change: changeType,
-      diff: "Opened in editor",
-    },
-  });
+interface SearchReplaceBlock {
+  search: string;
+  replace: string;
 }
 
-function createApprovalId(prefix: string): string {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+function parseSearchReplaceBlocks(patch: string): SearchReplaceBlock[] {
+  const blocks: SearchReplaceBlock[] = [];
+  const regex = /<<<<<<< SEARCH\n([\s\S]*?)\n=======\n([\s\S]*?)\n>>>>>>> REPLACE/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(patch)) !== null) {
+    blocks.push({
+      search: match[1],
+      replace: match[2],
+    });
+  }
+
+  // Also support old format (oldText/newText) for backward compatibility
+  if (blocks.length === 0) {
+    try {
+      const parsed = JSON.parse(patch);
+      if (parsed.oldText && parsed.newText) {
+        blocks.push({ search: parsed.oldText, replace: parsed.newText });
+      }
+    } catch {
+      // Not JSON, no blocks found
+    }
+  }
+
+  return blocks;
+}
+
+function countOccurrences(text: string, search: string): number {
+  let count = 0;
+  let idx = 0;
+  while ((idx = text.indexOf(search, idx)) !== -1) {
+    count++;
+    idx += search.length;
+  }
+  return count;
+}
+
+async function showDiffApproval(
+  ctx: ToolExecutionContext,
+  originalUri: string,
+  relativePath: string,
+  oldContent: string,
+  newContent: string,
+): Promise<boolean> {
+  if (!ctx.requestApproval) return false;
+
+  try {
+    const origUri = vscode.Uri.file(originalUri);
+    const previewDir = vscode.Uri.joinPath(ctx.extensionContext.globalStorageUri, "previews");
+    await vscode.workspace.fs.createDirectory(previewDir);
+    const safeName = relativePath.replace(/[\\/:*?"<>|]/g, "_");
+    const previewUri = vscode.Uri.joinPath(previewDir, `preview-${Date.now()}-${safeName}`);
+    await vscode.workspace.fs.writeFile(previewUri, Buffer.from(newContent, "utf8"));
+    await vscode.commands.executeCommand("vscode.diff", origUri, previewUri, `Shogo edit: ${relativePath}`);
+
+    return ctx.requestApproval({
+      id: `edit-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      kind: "edit",
+      title: "Apply edit?",
+      description: `Review the diff for ${relativePath}`,
+      primaryAction: "Apply",
+      secondaryAction: "Reject",
+      details: { file: relativePath, diff: "Opened in editor" },
+    });
+  } catch {
+    return false;
+  }
 }
 
 export function summarizeToolData(data: unknown): string {

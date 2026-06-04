@@ -93,5 +93,17 @@ export function truncateText(text: string, maxChars = 20000): string {
 }
 
 export function asRelative(uri: vscode.Uri): string {
-  return vscode.workspace.asRelativePath(uri, false).replace(/\\/g, "/");
+  return vscode.workspace.asRelativePath(uri, false).replace(/\\\\/g, "/");
+}
+
+export function getWorkspaceRootPath(): string | undefined {
+  return getWorkspaceRoot()?.uri.fsPath;
+}
+
+export function resolveAbsolutePath(relativePath: string): string {
+  const root = getWorkspaceRootPath();
+  if (!root) throw new Error("No workspace folder is open.");
+  const clean = normalizeRelativePath(relativePath);
+  assertSafeRelativePath(clean);
+  return require("path").join(root, clean);
 }
