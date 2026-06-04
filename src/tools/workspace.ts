@@ -107,3 +107,11 @@ export function resolveAbsolutePath(relativePath: string): string {
   assertSafeRelativePath(clean);
   return require("path").join(root, clean);
 }
+
+export function truncateTerminalError(output: string, maxChars = 2500): string {
+  if (output.length <= maxChars) return output;
+  // Keep first 500 chars (what ran) + last 2000 chars (the actual error)
+  const top = output.slice(0, 500);
+  const bottom = output.slice(-(maxChars - 500));
+  return `${top}\n\n...[TRUNCATED ${output.length - maxChars} CHARS]...\n\n${bottom}`;
+}

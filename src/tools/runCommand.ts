@@ -3,7 +3,7 @@ import { spawn, type ChildProcess } from "child_process";
 import * as vscode from "vscode";
 import type { ToolDefinition, ToolExecutionContext, ToolResult } from "../agent/types";
 import { classifyCommand } from "../safety/commandPolicy";
-import { getWorkspaceRoot, getWorkspaceRootPath, truncateText } from "./workspace";
+import { getWorkspaceRoot, getWorkspaceRootPath, truncateText, truncateTerminalError } from "./workspace";
 
 const MAX_OUTPUT_CHARS = 60000;
 const DEFAULT_TIMEOUT_MS = 120000;
@@ -115,8 +115,8 @@ class PersistentPowerShell {
 
     return new Promise((resolve) => {
       const marker = `__SHOGO_DONE_${++this.commandId}__`;
-      // PowerShell: wrap in try/finally to guarantee marker is always emitted
-      const wrappedCmd = `try { ${command} } finally { Write-Output "${marker}" }`;
+      // Capture $LastExitCode in the marker so we know if the command actually failed
+      const wrappedCmd = `try { ${command} } finally { Write-Output "${marker}_EXIT=$LastExitCode" }`;
 
       let stdout = "";
       let stderr = "";
@@ -153,16 +153,18 @@ class PersistentPowerShell {
       this.process!.stdin?.write(wrappedCmd + "\n");
 
       const checkInterval = setInterval(() => {
-        if (stdout.includes(marker)) {
+        const exitMatch = stdout.match(/__SHOGO_DONE_(\d+)__EXIT=(-?\d+)/);
+        if (exitMatch) {
           clearInterval(checkInterval);
-          this.process!.stdout?.removeListener("data", onData);
-          this.process!.stderr?.removeListener("data", onErrData);
+          this.process?.stdout?.removeListener("data", onData);
+          this.process?.stderr?.removeListener("data", onErrData);
 
-          // Extract everything before the marker
-          const markerIdx = stdout.indexOf(marker);
+          const markerPattern = /__SHOGO_DONE_\d+__EXIT=-?\d+/;
+          const markerIdx = stdout.search(markerPattern);
           const beforeMarker = stdout.slice(0, markerIdx).trim();
+          const exitCode = parseInt(exitMatch[2], 10);
           stdout = beforeMarker;
-          finish(0); // try/finally always exits cleanly
+          finish(exitCode);
         }
       }, 50);
 
@@ -171,8 +173,9 @@ class PersistentPowerShell {
         if (!settled) {
           this.process!.stdout?.removeListener("data", onData);
           this.process!.stderr?.removeListener("data", onErrData);
-          this.reset(); // Process is likely hung, restart it
-          finish(stdout.includes(marker) ? 0 : -1);
+          this.reset();
+          const exitMatch = stdout.match(/__SHOGO_DONE_\d+__EXIT=(-?\d+)/);
+          finish(exitMatch ? parseInt(exitMatch[1], 10) : -1);
         }
       }, timeoutMs + 1000);
     });
@@ -426,7 +429,18 @@ export const runCommandTool: ToolDefinition = {
       platform: isWindows() ? "windows" : "unix",
     };
 
-    if (result.code === 0) return { ok: true, data };
-    else return { ok: false, error: `Command exited with code ${result.code}.`, data };
+    if (result.code === 0) {
+      return {
+        ok: true,
+        data: `✅ COMMAND SUCCEEDED (${durationMs}ms)\n\nOUTPUT:\n${truncateTerminalError(stdoutTruncated)}`,
+      };
+    } else {
+      const combined = (stderrTruncated + "\n" + stdoutTruncated).trim();
+      return {
+        ok: false,
+        error: `Command exited with code ${result.code}.`,
+        data: `❌ COMMAND FAILED (Exit Code: ${result.code}, ${durationMs}ms)\n\nTERMINAL OUTPUT:\n${truncateTerminalError(combined)}`,
+      };
+    }
   },
 };

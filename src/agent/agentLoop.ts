@@ -383,6 +383,19 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<string> {
           content: `RESULT(${toolCall.toolName}):${smartTruncateResult(toolCall.toolName, result)}`,
         });
         messages.push(...retryMessages);
+
+        // Auto-diagnostic: inject guidance when tools fail so the LLM self-corrects
+        if (!result.ok) {
+          const errorDetail = typeof result.error === "string" ? result.error : "unknown error";
+          messages.push({
+            role: "user",
+            content: `The previous tool call (${toolCall.toolName}) failed. Do not blindly retry it. ` +
+              `Read the error output above carefully. Identify the root cause (missing dependency, wrong path, ` +
+              `syntax error, permission issue, etc.), then use a DIFFERENT tool or approach to fix it. ` +
+              `If it's a command failure, diagnose the error message before retrying. ` +
+              `Error was: ${errorDetail.slice(0, 300)}`,
+          });
+        }
       }
     }
 
