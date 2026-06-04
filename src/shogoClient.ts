@@ -97,6 +97,15 @@ export async function streamChat(opts: StreamOptions): Promise<StreamResult> {
           "text fallback after empty native"
         );
       }
+
+      if (result.toolCalls.length === 0 && result.text.length > 0) {
+        const textToolCalls = parseToolCallsFromText(result.text);
+        if (textToolCalls.length > 0) {
+          logInfo(`Native returned 0 tool calls but text parser found ${textToolCalls.length} — using parsed calls`);
+          return { text: result.text, toolCalls: textToolCalls };
+        }
+      }
+
       return result;
     } catch (nativeError: unknown) {
       const msg = nativeError instanceof Error ? nativeError.message : String(nativeError);
