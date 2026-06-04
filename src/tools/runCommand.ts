@@ -51,63 +51,132 @@ function getOutputChannel(): vscode.OutputChannel {
 }
 
 // ── Two-Strategy Shell ──
-// Windows: Individual spawns with PowerShell try/finally markers
-// Linux/Mac: Persistent shell for state preservation
+// Windows: Persistent PowerShell PTY (dir + env + module state preserved)
+// Linux/Mac: Persistent bash/zsh shell (same concept)
 
 function isWindows(): boolean {
   return os.platform() === "win32";
 }
 
-// Windows: spawn individual commands with PowerShell try/finally
-async function executeWindows(
-  command: string,
-  timeoutMs: number,
-  signal?: AbortSignal,
-  cwdOverride?: string,
-): Promise<{ stdout: string; stderr: string; code: number }> {
-  const marker = `__SHOGO_DONE_${Date.now()}__`;
-  const wrappedCmd = `try { ${command} } finally { Write-Output "${marker}" }`;
+/**
+ * PersistentPowerShell — keeps a single PowerShell process alive.
+ * Preserves: current directory, environment variables, loaded modules,
+ * PSReadLine history, and tab completion state across all commands.
+ */
+class PersistentPowerShell {
+  private process: ChildProcess | null = null;
+  private cwd: string;
+  private consecutiveErrors = 0;
+  private commandId = 0;
 
-  const shell = "powershell.exe";
-  const args = ["-NoProfile", "-NonInteractive", "-Command", wrappedCmd];
-  const cwd = cwdOverride || getWorkspaceRootPath() || process.cwd();
-  const env = { ...process.env, ...HEADLESS_ENV };
+  constructor(cwd: string) { this.cwd = cwd; }
 
-  return new Promise((resolve) => {
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
+  isAlive(): boolean {
+    return this.process !== null && this.process.exitCode === null;
+  }
 
-    const proc = spawn(shell, args, {
-      cwd,
+  start(): void {
+    this.stop();
+    const env = { ...process.env, ...HEADLESS_ENV };
+    this.process = spawn("powershell.exe", [
+      "-NoProfile",
+      "-NoLogo",
+      "-NonInteractive",
+    ], {
+      cwd: this.cwd,
       env,
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });
 
-    const finish = (code: number) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
-      resolve({ stdout: stdout.trim(), stderr: stderr.trim(), code });
-    };
+    this.process.on("error", () => { this.consecutiveErrors++; });
+    this.process.on("exit", () => { this.process = null; });
 
-    const timer = setTimeout(() => { try { proc.kill(); } catch {} finish(-1); }, timeoutMs);
-    const onAbort = () => { try { proc.kill(); } catch {} finish(-1); };
-    signal?.addEventListener("abort", onAbort);
+    // Send a silent init command to verify the shell is alive
+    this.process.stdin?.write('Write-Output "__SHOGO_PTY_READY__"\n');
+  }
 
-    proc.stdout?.on("data", (d: Buffer) => {
-      stdout += d.toString("utf8");
-      if (stdout.length > MAX_OUTPUT_CHARS) stdout = stdout.slice(-MAX_OUTPUT_CHARS);
+  stop(): void {
+    if (this.process) {
+      try { this.process.stdin?.write("exit\n"); } catch {}
+      try { this.process.kill(); } catch {}
+      this.process = null;
+    }
+  }
+
+  reset(): void { this.stop(); this.consecutiveErrors = 0; this.start(); }
+
+  async execute(
+    command: string,
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ): Promise<{ stdout: string; stderr: string; code: number }> {
+    if (!this.isAlive() || this.consecutiveErrors >= 5) this.reset();
+
+    return new Promise((resolve) => {
+      const marker = `__SHOGO_DONE_${++this.commandId}__`;
+      // PowerShell: wrap in try/finally to guarantee marker is always emitted
+      const wrappedCmd = `try { ${command} } finally { Write-Output "${marker}" }`;
+
+      let stdout = "";
+      let stderr = "";
+      let settled = false;
+
+      const finish = (code: number) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+        resolve({ stdout: stdout.trim(), stderr: stderr.trim(), code });
+      };
+
+      const timer = setTimeout(() => {
+        this.process?.kill();
+        this.consecutiveErrors++;
+        finish(-1);
+      }, timeoutMs);
+      const onAbort = () => { this.process?.kill(); finish(-1); };
+      signal?.addEventListener("abort", onAbort);
+
+      const onData = (chunk: Buffer) => {
+        const text = chunk.toString("utf8");
+        stdout += text;
+        if (stdout.length > MAX_OUTPUT_CHARS) stdout = stdout.slice(-MAX_OUTPUT_CHARS);
+      };
+      const onErrData = (chunk: Buffer) => {
+        stderr += chunk.toString("utf8");
+        if (stderr.length > MAX_OUTPUT_CHARS) stderr = stderr.slice(-MAX_OUTPUT_CHARS);
+      };
+
+      this.process!.stdout?.on("data", onData);
+      this.process!.stderr?.on("data", onErrData);
+      this.process!.stdin?.write(wrappedCmd + "\n");
+
+      const checkInterval = setInterval(() => {
+        if (stdout.includes(marker)) {
+          clearInterval(checkInterval);
+          this.process!.stdout?.removeListener("data", onData);
+          this.process!.stderr?.removeListener("data", onErrData);
+
+          // Extract everything before the marker
+          const markerIdx = stdout.indexOf(marker);
+          const beforeMarker = stdout.slice(0, markerIdx).trim();
+          stdout = beforeMarker;
+          finish(0); // try/finally always exits cleanly
+        }
+      }, 50);
+
+      setTimeout(() => {
+        clearInterval(checkInterval);
+        if (!settled) {
+          this.process!.stdout?.removeListener("data", onData);
+          this.process!.stderr?.removeListener("data", onErrData);
+          this.reset(); // Process is likely hung, restart it
+          finish(stdout.includes(marker) ? 0 : -1);
+        }
+      }, timeoutMs + 1000);
     });
-    proc.stderr?.on("data", (d: Buffer) => {
-      stderr += d.toString("utf8");
-      if (stderr.length > MAX_OUTPUT_CHARS) stderr = stderr.slice(-MAX_OUTPUT_CHARS);
-    });
-    proc.on("close", (code) => { finish(code ?? -1); });
-    proc.on("error", () => { finish(-1); });
-  });
+  }
 }
 
 // Linux/Mac: Persistent shell for state preservation
@@ -219,8 +288,17 @@ class PersistentShell {
 }
 
 let globalShell: PersistentShell | null = null;
+let globalWinShell: PersistentPowerShell | null = null;
 
-function getShell(): PersistentShell {
+function getShell(): PersistentShell | PersistentPowerShell {
+  if (isWindows()) {
+    if (!globalWinShell) {
+      const root = getWorkspaceRootPath() || process.cwd();
+      globalWinShell = new PersistentPowerShell(root);
+      globalWinShell.start();
+    }
+    return globalWinShell;
+  }
   if (!globalShell) {
     const root = getWorkspaceRootPath() || process.cwd();
     globalShell = new PersistentShell(root);
@@ -250,6 +328,16 @@ export const runCommandTool: ToolDefinition = {
     if (typeof input.command !== "string") return { ok: false, error: "command must be a string" };
 
     let command = input.command.trim();
+
+    // ── PowerShell command normalization ──
+    if (isWindows()) {
+      // Convert: cmd1 && cmd2 → cmd1; if ($?) { cmd2 }
+      // This makes && work correctly on PowerShell 5.1+
+      command = command.replace(
+        /(\S+(?:\s+\S+)*)\s*&&\s*(.+)/g,
+        (_match: string, cmd1: string, cmd2: string) => `${cmd1.trim()}; if ($?) { ${cmd2.trim()} }`,
+      );
+    }
 
     // Strip leading `cd <dir> &&` or `cd <dir>;` — use cwd parameter instead
     const cdPattern = /^\s*cd\s+([^\s&;|]+)\s*[&;|]\s*/i;
@@ -299,14 +387,17 @@ export const runCommandTool: ToolDefinition = {
     channel.show(true);
 
     const startTime = Date.now();
-    let result: { stdout: string; stderr: string; code: number };
-
-    if (isWindows()) {
-      result = await executeWindows(command, timeoutMs, ctx.signal, workingDir);
-    } else {
-      const shell = getShell();
-      result = await shell.execute(command, timeoutMs, ctx.signal);
+    const shell = getShell();
+    // For persistent shells, cd actually persists — send cd + command together
+    let execCommand = command;
+    if (workingDir && workingDir !== (getWorkspaceRootPath() || process.cwd())) {
+      const relativeCwd = require("path").relative(getWorkspaceRootPath() || process.cwd(), workingDir);
+      if (relativeCwd) {
+        const cdPrefix = isWindows() ? `Set-Location "${workingDir}"; ` : `cd "${workingDir}" && `;
+        execCommand = `${cdPrefix}${command}`;
+      }
     }
+    const result = await shell.execute(execCommand, timeoutMs, ctx.signal);
 
     const durationMs = Date.now() - startTime;
 

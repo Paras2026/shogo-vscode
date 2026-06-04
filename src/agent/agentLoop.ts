@@ -541,6 +541,8 @@ function buildToolProtocol(): string {
     "15. SHELL RULES: On Windows (PowerShell): NEVER use && or &. Use ; to chain commands. Use the cwd parameter of runCommand to run in a subdirectory — do NOT use 'cd dir && command'.",
     "16. When running commands in a subdirectory: use runCommand with cwd='subdirectory' parameter. Example: runCommand({ command: 'git log', cwd: 'ai-content-creator' }).",
     "17. Always check the environment section of the system prompt to know which OS/shell you are on before running commands.",
+    "18. ALIAS WARNING: On Windows PowerShell, 'ls' and 'cat' are aliases but do NOT accept Linux flags. Never use 'ls -la', 'ls -laR', 'cat -n', 'grep -r' etc. Use PowerShell equivalents: 'Get-ChildItem -Recurse', 'Get-Content', 'Select-String'.",
+    "19. PREFERRED COMMAND STYLE: On Windows use PowerShell-native commands: Get-ChildItem (not ls), Get-Content (not cat), Select-String (not grep), Test-Path (not test). This avoids alias confusion.",
   ].join("\n");
 }
 
