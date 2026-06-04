@@ -4,6 +4,7 @@ import { logInfo, logError, logDebug, logWarn } from "../logger";
 import { executeTool, getToolDescriptions, getToolNames, validateToolInput } from "./toolRegistry";
 import type { ApprovalRequest, ToolResult } from "./types";
 import { WorkingMemory } from "./workingMemory";
+import { getEnvironmentContext, buildEnvironmentErrorContext, type EnvironmentContext } from "../context/environmentContext";
 
 export interface AgentLoopOptions {
   apiKey: string;
@@ -16,6 +17,7 @@ export interface AgentLoopOptions {
   onActivity?: (text: string) => void;
   onFinalToken?: (text: string) => void;
   requestApproval?: (request: ApprovalRequest) => Promise<boolean>;
+  environment?: EnvironmentContext;
 }
 
 const MAX_STEPS = 30;
@@ -412,6 +414,9 @@ async function executeSingleTool(
 ): Promise<{ toolCall: StructuredToolCall; result: ToolResult; retryMessages: ChatMessage[] }> {
   opts.onActivity?.(`Tool: ${toolCall.toolName}`);
 
+  // Lazy-load environment context
+  const env = opts.environment || await getEnvironmentContext().catch(() => undefined);
+
   const validationError = validateToolInput(toolCall.toolName, toolCall.input);
   if (validationError) {
     return { toolCall, result: { ok: false, error: validationError }, retryMessages: [] };
@@ -429,7 +434,7 @@ async function executeSingleTool(
   const retryMessages: ChatMessage[] = [];
   while (!result.ok && retryCount < MAX_TOOL_ERROR_RETRIES) {
     retryCount++;
-    retryMessages.push({ role: "user", content: buildRetryFeedback(toolCall.toolName, toolCall.input, result, retryCount) });
+    retryMessages.push({ role: "user", content: buildRetryFeedback(toolCall.toolName, toolCall.input, result, retryCount, env) });
 
     const retryResult = await streamChat({
       apiKey: opts.apiKey, model: opts.model, apiUrl: opts.apiUrl,
@@ -489,15 +494,20 @@ function buildToolProtocol(): string {
   ].join("\n");
 }
 
-function buildRetryFeedback(toolName: string, args: Record<string, unknown>, result: ToolResult, retryCount: number): string {
+function buildRetryFeedback(toolName: string, args: Record<string, unknown>, result: ToolResult, retryCount: number, env?: EnvironmentContext): string {
   const errorDetail = result.error ?? "Unknown error";
+  const envContext = env ? buildEnvironmentErrorContext(env, toolName, errorDetail) : "";
+
   if (toolName === "applyPatch" && (errorDetail.includes("not found") || errorDetail.includes("SEARCH text not found"))) {
-    return `Tool ${toolName} failed (attempt ${retryCount}): ${errorDetail}\nRead the file again with readFile. Use EXACT text from the file as the SEARCH block.`;
+    return `Tool ${toolName} failed (attempt ${retryCount}): ${errorDetail}\nRead the file again with readFile. Use EXACT text from the file as the SEARCH block.${envContext ? "\n" + envContext : ""}`;
   }
   if (toolName === "readFile") {
-    return `Tool ${toolName} failed (attempt ${retryCount}): ${errorDetail}\nCheck the path. Use listFiles to discover files.`;
+    return `Tool ${toolName} failed (attempt ${retryCount}): ${errorDetail}\nCheck the path. Use listFiles to discover files.${envContext ? "\n" + envContext : ""}`;
   }
-  return `Tool ${toolName} failed (attempt ${retryCount}): ${errorDetail}. Fix and retry.`;
+  if (toolName === "runCommand") {
+    return `Tool ${toolName} failed (attempt ${retryCount}): ${errorDetail}${envContext ? "\n" + envContext : "\nUse the correct shell for your platform."}`;
+  }
+  return `Tool ${toolName} failed (attempt ${retryCount}): ${errorDetail}.${envContext ? "\n" + envContext : ""} Fix and retry.`;
 }
 
 function looksLikeUnverifiedWorkspaceSuccess(text: string): boolean {

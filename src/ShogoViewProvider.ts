@@ -3,6 +3,7 @@ import { getApiKey, setApiKey } from "./auth";
 import { runAgentLoop } from "./agent/agentLoop";
 import type { ApprovalRequest } from "./agent/types";
 import { buildSystemPrompt, gatherSmartWorkspaceContext } from "./context";
+import { getEnvironmentContext, type EnvironmentContext } from "./context/environmentContext";
 import type { ChatMessage } from "./shogoClient";
 import { logInfo, logError, logDebug, logWarn, initLogger, showOutputChannel } from "./logger";
 
@@ -169,6 +170,7 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
 
     try {
       logDebug("Step 6: Calling runAgentLoop...");
+      const env = await getEnvironmentContext().catch(() => undefined);
       assistantText = await runAgentLoop({
         apiKey,
         model,
@@ -177,6 +179,7 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
         messages: this.history,
         extensionContext: this.context,
         signal: this.abortController.signal,
+        environment: env,
         onActivity: (text) => {
           this.post({ type: "toolActivity", text });
         },

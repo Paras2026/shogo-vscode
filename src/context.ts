@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { gatherSmartContext, type SmartContextResult } from "./context/smartContext";
+import { getEnvironmentContext, formatEnvironmentForPrompt, type EnvironmentContext } from "./context/environmentContext";
 import { logWarn, logDebug } from "./logger";
 
 export interface WorkspaceContext {
@@ -9,6 +10,7 @@ export interface WorkspaceContext {
   selection?: string;
   fullText?: string;
   smartContext?: SmartContextResult;
+  environment?: EnvironmentContext;
 }
 
 const MAX_FILE_CHARS = 8000;
@@ -46,7 +48,14 @@ export async function gatherContext(): Promise<WorkspaceContext> {
 export async function gatherSmartWorkspaceContext(userMessage: string): Promise<WorkspaceContext> {
   const ctx = await gatherContext();
 
-  // Return cached result if already fetched (project structure doesn't change between messages)
+  // Detect environment (cached after first call)
+  try {
+    ctx.environment = await getEnvironmentContext();
+  } catch {
+    ctx.environment = undefined;
+  }
+
+  // Return cached smart context if already fetched
   if (smartContextFetched) {
     ctx.smartContext = cachedSmartContext;
     return ctx;
@@ -101,6 +110,10 @@ export function buildSystemPrompt(ctx: WorkspaceContext): string {
   }
 
   if (ctx.smartContext) {
+  if (ctx.environment) {
+    parts.push(formatEnvironmentForPrompt(ctx.environment));
+  }
+
     const sc = ctx.smartContext;
 
     if (sc.projectTree) {
