@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { streamChat, stripToolCallsFromText, type ChatMessage, type StructuredToolCall } from "../shogoClient";
 import { logInfo, logError, logDebug, logWarn } from "../logger";
-import { executeTool, getToolDescriptions, validateToolInput } from "./toolRegistry";
+import { executeTool, getToolDescriptions, getToolNames, validateToolInput } from "./toolRegistry";
 import type { ApprovalRequest, ToolResult } from "./types";
 
 export interface AgentLoopOptions {
@@ -123,6 +123,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<string> {
         continue;
       }
 
+      opts.onFinalToken?.(cleanedText);
       const orphanChars = cleanedText.replace(/^[{}\s,]+|[{}\s,]+$/g, "");
       if (orphanChars.length === 0 && responseText.includes("tool_call")) {
         logWarn(`Response was entirely a tool call that wasn't parsed. Raw: ${responseText.slice(0, 200)}`);
@@ -139,7 +140,6 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<string> {
         continue;
       }
 
-      opts.onFinalToken?.(cleanedText);
       return cleanedText;
     }
 
