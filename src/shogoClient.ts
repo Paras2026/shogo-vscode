@@ -111,6 +111,11 @@ export async function streamChat(opts: StreamOptions): Promise<StreamResult> {
       return result;
     } catch (nativeError: unknown) {
       const msg = nativeError instanceof Error ? nativeError.message : String(nativeError);
+      // Don't penalize the model for user-initiated aborts
+      if (msg.includes("aborted") || msg.includes("AbortError")) {
+        logDebug(`Native tool_use aborted for "${model}" (user stop) — not marking as failed`);
+        throw nativeError; // Re-throw abort so caller handles it
+      }
       logWarn(`Native tool_use failed for "${model}": ${msg} — switching to text mode for this model`);
       nativeToolUseFailedByModel.add(model);
     }

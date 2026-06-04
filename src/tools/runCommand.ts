@@ -13,6 +13,8 @@ const HEADLESS_ENV: Record<string, string> = {
   CI: "true",
   DEBIAN_FRONTEND: "noninteractive",
   GIT_TERMINAL_PROMPT: "0",
+  GIT_PAGER: "cat",
+  PAGER: "cat",
   GIT_EDITOR: "true",
   VISUAL: "",
   EDITOR: "true",
@@ -65,7 +67,8 @@ async function executeWindows(
   const marker = `__SHOGO_DONE_${Date.now()}__`;
   const wrappedCmd = `try { ${command} } finally { Write-Output "${marker}" }`;
 
-  const shell = process.env.COMSPEC || "powershell.exe";
+  // Always use powershell.exe, NOT COMSPEC (which is cmd.exe on Windows)
+  const shell = "powershell.exe";
   const args = ["-NoProfile", "-NonInteractive", "-Command", wrappedCmd];
   const cwd = getWorkspaceRootPath() || process.cwd();
   const env = { ...process.env, ...HEADLESS_ENV };
