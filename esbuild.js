@@ -27,7 +27,7 @@ async function main() {
     sourcesContent: false,
     platform: "node",
     outfile: "dist/extension.js",
-    external: ["vscode", "ai", "@shogo-ai/sdk"],
+    external: ["vscode"],
     plugins: [stubPlugin],
     logLevel: "info",
   });
