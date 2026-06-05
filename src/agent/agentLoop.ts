@@ -287,6 +287,8 @@ interface StepContext {
   successfulToolCalls: number;
   consecutiveToolErrors: number;
   writeToolsExecuted: number;
+  forceTextOnly?: boolean;
+  forceCount?: number;
 }
 
 async function agentStep(ctx: StepContext): Promise<string> {
@@ -351,6 +353,37 @@ async function agentStep(ctx: StepContext): Promise<string> {
     return `Error: ${msg}`;
   }
 
+  // ── Hard stop: if forceTextOnly was set and LLM still calls tools, terminate ──
+  if (ctx.forceTextOnly && toolCalls.length > 0) {
+    const forceCount = (ctx.forceCount || 0) + 1;
+    if (forceCount >= 2) {
+      // Two attempts to get text-only response — hard stop
+      const lastText = stripToolCallsFromText(responseText);
+      const msg = lastText.length > 10
+        ? lastText
+        : `Task terminated: Agent was stuck calling tools in a loop. Here is what was gathered:\n\n${memory.toSummary()}`;
+      logWarn(`Force-stop: LLM still calling tools after forceTextOnly intervention (attempt ${forceCount})`);
+      opts.onFinalToken?.(msg);
+      return msg;
+    }
+    // First attempt: strip tool calls and inject stronger message
+    const cleaned = stripToolCallsFromText(responseText);
+    logWarn(`ForceTextOnly: LLM still called tools — stripping and retrying (attempt ${forceCount})`);
+    currentMessages.push({ role: "assistant", content: responseText });
+    currentMessages.push({
+      role: "user",
+      content: [
+        `CRITICAL: You called tools AGAIN despite being told to stop.`,
+        `This is attempt ${forceCount}/2. If you call tools one more time, the task will be TERMINATED.`,
+        ``,
+        `Your response must be TEXT ONLY. No JSON. No tool calls. Just plain text.`,
+        ``,
+        `Working memory:\n${memory.toSummary()}`,
+      ].join("\n"),
+    });
+    return agentStep({ ...ctx, messages: currentMessages, depth: depth + 1, forceTextOnly: true, forceCount });
+  }
+
   // ── No tool calls → LLM wants to answer ──
   if (toolCalls.length === 0) {
     logDebug(`No tool calls at depth ${depth + 1}. Response: ${responseText.length} chars`);
@@ -380,7 +413,19 @@ async function agentStep(ctx: StepContext): Promise<string> {
   }
 
   // ── Deduplicate tool calls ──
+  const originalCount = toolCalls.length;
   toolCalls = deduplicateToolCalls(toolCalls, toolCallCounts);
+  const deduplicatedCount = originalCount - toolCalls.length;
+
+  // ── If ALL tools were duplicates → tell the LLM to stop calling tools ──
+  if (originalCount > 0 && toolCalls.length === 0) {
+    logWarn(`All ${originalCount} tool calls were duplicates — injecting stop signal`);
+    currentMessages.push({
+      role: "user",
+      content: `STOP: Every tool you called was a duplicate of a previous call. You already have all the information those tools would provide. Do NOT call any more tools. Synthesize your answer NOW using what you already know.\n\nWorking memory:\n${memory.toSummary()}`,
+    });
+    return agentStep({ ...ctx, messages: currentMessages, depth: depth + 1, forceTextOnly: true });
+  }
 
   // ── Loop guard ──
   const loopStatus = detectStuckLoop(toolCalls, toolCallCounts);
@@ -388,15 +433,27 @@ async function agentStep(ctx: StepContext): Promise<string> {
     logWarn(`Loop guard: same tool called 3+ times consecutively — forcing response`);
     currentMessages.push({
       role: "user",
-      content: `CRITICAL: You are stuck in a loop. HALT tool execution and synthesize your answer now using information you already have. Working memory:\n${memory.toSummary()}`,
+      content: [
+        `STOP — SYSTEM OVERRIDE`,
+        ``,
+        `You are stuck in an infinite loop. You MUST stop calling tools immediately.`,
+        `You have already tried this tool 3+ times with the same result.`,
+        ``,
+        `Your ONLY option now is to provide a TEXT response. Do not output any JSON tool calls.`,
+        `Summarize what you know and what you were trying to accomplish.`,
+        ``,
+        `If you call another tool, the task will be force-terminated.`,
+        ``,
+        `Working memory:\n${memory.toSummary()}`,
+      ].join("\n"),
     });
-    return agentStep({ ...ctx, messages: currentMessages, depth: depth + 1 });
+    return agentStep({ ...ctx, messages: currentMessages, depth: depth + 1, forceTextOnly: true });
   }
   if (loopStatus === "warn") {
     logWarn(`Loop guard: same tool called 2 times consecutively`);
     currentMessages.push({
       role: "user",
-      content: `WARNING: You're repeating the same action. Choose a different approach or provide your analysis.`,
+      content: `WARNING: You're repeating the same action. Choose a completely different approach or provide your analysis. Do NOT call the same tool again.`,
     });
     return agentStep({ ...ctx, messages: currentMessages, depth: depth + 1 });
   }
