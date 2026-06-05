@@ -26,6 +26,7 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
   private history: ChatMessage[] = [];
   private abortController?: AbortController;
   private pendingApprovals = new Map<string, (approved: boolean) => void>();
+  private pendingBudgetApprovals = new Map<string, (decision: "continue" | "stop" | "increase") => void>();
   private currentSessionId?: string;
 
   constructor(private readonly context: vscode.ExtensionContext) {
@@ -68,6 +69,10 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
         case "approvalResponse":
           logInfo(`Approval response: id=${msg.id} approved=${msg.approved}`);
           this.handleApprovalResponse(msg.id, !!msg.approved);
+          break;
+        case "budgetApprovalResponse":
+          logInfo(`Budget approval response: id=${msg.id} decision=${msg.decision}`);
+          this.handleBudgetApprovalResponse(msg.id, msg.decision);
           break;
         case "newChat":
           logInfo("New chat requested");
@@ -173,6 +178,11 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
     try {
       logDebug("Step 6: Calling runAgentLoop...");
       const env = await getEnvironmentContext().catch(() => undefined);
+
+      // Read budget config from VS Code settings
+      const budgetEnabled = config.get<boolean>("tokenBudget.enabled", true);
+      const budgetLimit = config.get<number>("tokenBudget.limitDollars", 5.0);
+
       assistantText = await runAgentLoop({
         apiKey,
         model,
@@ -182,13 +192,21 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
         extensionContext: this.context,
         signal: this.abortController.signal,
         environment: env,
+        budgetConfig: {
+          enabled: budgetEnabled,
+          limitDollars: budgetLimit,
+        },
         onActivity: (text) => {
           this.post({ type: "toolActivity", text });
         },
         onFinalToken: (chunk) => {
           this.post({ type: "assistantToken", text: chunk });
         },
+        onBudgetWarning: (summary) => {
+          this.post({ type: "budget:warning", text: summary });
+        },
         requestApproval: (request) => this.requestApproval(request),
+        requestBudgetApproval: (data) => this.requestBudgetApproval(data),
       });
       logDebug(`Step 6 done: runAgentLoop returned ${assistantText.length} chars`);
       this.history.push({ role: "assistant", content: assistantText });
@@ -253,11 +271,41 @@ export class ShogoViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  private requestBudgetApproval(data: { summary: string; recentActions: string[]; remaining: number }): Promise<"continue" | "stop" | "increase"> {
+    if (!this.view) {
+      return Promise.resolve("stop");
+    }
+
+    const id = `budget-${Date.now()}`;
+    this.post({
+      type: "budget:approval_required",
+      id,
+      summary: data.summary,
+      recentActions: data.recentActions,
+      remaining: data.remaining,
+    });
+
+    return new Promise((resolve) => {
+      this.pendingBudgetApprovals.set(id, resolve);
+    });
+  }
+
+  private handleBudgetApprovalResponse(id: string, decision: "continue" | "stop" | "increase"): void {
+    const resolve = this.pendingBudgetApprovals.get(id);
+    if (!resolve) return;
+    this.pendingBudgetApprovals.delete(id);
+    resolve(decision);
+  }
+
   private rejectAllApprovals(): void {
     for (const resolve of this.pendingApprovals.values()) {
       resolve(false);
     }
     this.pendingApprovals.clear();
+    for (const resolve of this.pendingBudgetApprovals.values()) {
+      resolve("stop");
+    }
+    this.pendingBudgetApprovals.clear();
   }
 
   // ── Session Persistence ──

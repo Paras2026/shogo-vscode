@@ -1,10 +1,30 @@
+/**
+ * Recursive Agent Loop — the core of the extension.
+ *
+ * Replaces the flat 30-step for-loop with a recursive reasoning loop
+ * where the LLM naturally decides when to stop.
+ *
+ * Key features:
+ * - Recursive depth tracking (max 50)
+ * - Token budget guard integrated
+ * - Git checkpoints before major edits
+ * - Structured error recovery
+ * - Persistent project memory
+ * - Loop guard against stuck agents
+ * - Parallel tool execution with batching
+ */
 import * as vscode from "vscode";
 import { streamChat, stripToolCallsFromText, type ChatMessage, type StructuredToolCall } from "../shogoClient";
 import { logInfo, logError, logDebug, logWarn } from "../logger";
-import { executeTool, getToolDescriptions, getToolNames, validateToolInput } from "./toolRegistry";
+import { executeTool, getToolNames, validateToolInput } from "./toolRegistry";
 import type { ApprovalRequest, ToolResult } from "./types";
 import { WorkingMemory } from "./workingMemory";
 import { getEnvironmentContext, buildEnvironmentErrorContext, type EnvironmentContext } from "../context/environmentContext";
+import { TokenBudget, type BudgetConfig } from "./tokenBudget";
+import { buildErrorFeedback } from "./errorRecovery";
+import { createCheckpoint, rollbackToCheckpoint, type Checkpoint } from "../tools/gitCheckpoint";
+import { addLearning, recordErrorPattern, formatMemoryForContext } from "./projectMemory";
+import { buildFullSystemPrompt } from "./systemPrompt";
 
 export interface AgentLoopOptions {
   apiKey: string;
@@ -16,23 +36,22 @@ export interface AgentLoopOptions {
   signal?: AbortSignal;
   onActivity?: (text: string) => void;
   onFinalToken?: (text: string) => void;
+  onBudgetWarning?: (summary: string) => void;
   requestApproval?: (request: ApprovalRequest) => Promise<boolean>;
+  requestBudgetApproval?: (data: { summary: string; recentActions: string[]; remaining: number }) => Promise<"continue" | "stop" | "increase">;
   environment?: EnvironmentContext;
+  budgetConfig?: Partial<BudgetConfig>;
 }
 
-const MAX_STEPS = 30;
+// Limits
+const MAX_RECURSION_DEPTH = 50;
 const MAX_CONCURRENT_TOOLS = 4;
 const COMPACTION_THRESHOLD_CHARS = 60000;
 const TOOL_RESULT_MAX_CHARS = 4000;
 const MAX_TOOL_ERROR_RETRIES = 3;
 const CHARS_PER_TOKEN = 4;
-
-// Phase budgets (safety caps — the LLM can transition early)
-const PHASE_BUDGETS: Record<string, number> = {
-  explore: 15,
-  diagnose: 10,
-  respond: 0,
-};
+const CONSECUTIVE_ERROR_LIMIT = 6;
+const CHECKPOINT_THRESHOLD_TOOLS = 5; // Create checkpoint every N write tools
 
 function estimateTokens(text: string): number {
   return Math.ceil(text.length / CHARS_PER_TOKEN);
@@ -43,12 +62,9 @@ function totalMessagesChars(messages: ChatMessage[]): number {
 }
 
 function compactHistory(messages: ChatMessage[]): ChatMessage[] {
-  if (totalMessagesChars(messages) < COMPACTION_THRESHOLD_CHARS) {
-    return messages;
-  }
+  if (totalMessagesChars(messages) < COMPACTION_THRESHOLD_CHARS) return messages;
 
   logWarn(`Context compaction triggered: ${totalMessagesChars(messages)} chars`);
-
   const keepRecent = 4;
   const recent = messages.slice(-keepRecent);
   const old = messages.slice(0, -keepRecent);
@@ -186,96 +202,129 @@ function groupIndependent(toolCalls: StructuredToolCall[]): StructuredToolCall[]
   return batches;
 }
 
-// ── Phase detection ──
-type AgentPhase = "explore" | "diagnose" | "respond";
+// ── Write tool tracking for checkpoints ──
+const WRITE_TOOLS = new Set(["applyPatch", "writeFile", "runCommand"]);
+let writeToolCount = 0;
+let lastCheckpoint: Checkpoint | null = null;
 
-function detectPhaseFromResponse(text: string): AgentPhase | null {
-  const lower = text.toLowerCase();
-  // LLM signals it's ready to diagnose
-  if (/\b(diagnos|root cause|the (problem|issue|bug) (is|seems|appears))\b/i.test(lower)) return "diagnose";
-  // LLM signals it's ready to respond
-  if (/\b(here('s| is) (my |the )?(analysis|fix|solution|recommendation|answer|response))\b/i.test(lower)) return "respond";
-  return null;
+function isWriteTool(name: string): boolean {
+  return WRITE_TOOLS.has(name);
 }
 
-// ── Task decomposition ──
-function shouldDecomposeTask(userMessage: string): boolean {
-  if (userMessage.length < 50) return false;
-  const taskKeywords = /\b(fix|bug|issue|error|implement|feature|refactor|optimize|debug|update|replace|add|remove|create)\b/i;
-  return taskKeywords.test(userMessage);
+// ── Loop guard ──
+function detectStuckLoop(toolCalls: StructuredToolCall[], history: Map<string, number>): "ok" | "warn" | "force_stop" {
+  if (toolCalls.length === 0) return "ok";
+  const primary = toolCalls[0];
+  const key = `${primary.toolName}:${JSON.stringify(primary.input)}`;
+  const count = (history.get(key) || 0) + 1;
+  history.set(key, count);
+
+  if (count >= 3) return "force_stop";
+  if (count >= 2) return "warn";
+  return "ok";
 }
 
-async function generatePlan(
-  apiKey: string, model: string, apiUrl: string | undefined,
-  system: string, userMessage: string, signal?: AbortSignal
-): Promise<string | null> {
-  const planPrompt: ChatMessage[] = [
-    { role: "user", content: `Create a brief plan for this task. Output a JSON object with "goal" and "subtasks" (array of strings, max 6). No explanation, just JSON.\n\nTask: ${userMessage.slice(0, 500)}` },
-  ];
-
-  try {
-    const result = await streamChat({ apiKey, model, apiUrl, system: "You are a planning assistant. Output only JSON.", messages: planPrompt, signal, onToken: () => {} });
-    const text = result.text.trim();
-    // Try to extract JSON plan
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      const plan = JSON.parse(jsonMatch[0]);
-      if (plan.goal && Array.isArray(plan.subtasks)) {
-        return `PLAN: ${plan.goal}\nSubtasks:\n${plan.subtasks.map((s: string, i: number) => `${i + 1}. ${s}`).join("\n")}`;
-      }
-    }
-  } catch {}
-  return null;
-}
-
+/**
+ * The recursive agent loop.
+ * Called once to start — recurses until the task is complete or limits are hit.
+ */
 export async function runAgentLoop(opts: AgentLoopOptions): Promise<string> {
   let messages: ChatMessage[] = opts.messages;
-  const system = `${opts.system}\n\n${buildToolProtocol()}`;
-  let successfulToolCalls = 0;
-  let consecutiveToolErrors = 0;
-  let correctedFalseSuccess = false;
   const toolCallCounts = new Map<string, number>();
   const semaphore = createSemaphore(MAX_CONCURRENT_TOOLS);
   const memory = new WorkingMemory(opts.messages[opts.messages.length - 1]?.content || "");
+  const tokenBudget = new TokenBudget(opts.budgetConfig);
 
-  // Phase state
-  let currentPhase: AgentPhase = "explore";
-  const phaseStepCounts: Record<AgentPhase, number> = { explore: 0, diagnose: 0, respond: 0 };
+  let successfulToolCalls = 0;
+  let consecutiveToolErrors = 0;
+  let writeToolsExecuted = 0;
 
-  // Loop guard state
-  let consecutiveDuplicates = 0;
-  let lastToolCallKey = "";
-  let loopGuardTriggered = false;
+  // Reset checkpoint tracking
+  writeToolCount = 0;
+  lastCheckpoint = null;
 
-  logInfo(`Agent loop starting: model=${opts.model}, history=${messages.length} msgs, system=${estimateTokens(system)} tokens`);
+  // Build the full system prompt with the new architecture
+  const fullSystem = buildFullSystemPrompt({
+    workspaceName: opts.messages.length > 0 ? undefined : undefined,
+    environment: opts.environment,
+  });
 
-  // Task decomposition for complex tasks
-  const lastUserMsg = opts.messages[opts.messages.length - 1]?.content || "";
-  if (shouldDecomposeTask(lastUserMsg)) {
-    logInfo("Complex task detected — generating plan");
-    const plan = await generatePlan(opts.apiKey, opts.model, opts.apiUrl, opts.system, lastUserMsg, opts.signal);
-    if (plan) {
-      memory.addFinding(plan);
-      logInfo(`Task plan generated:\n${plan}`);
-    }
+  // Append project memory context
+  const memoryContext = formatMemoryForContext();
+  const systemWithMemory = memoryContext
+    ? `${fullSystem}\n\n${memoryContext}`
+    : fullSystem;
+
+  logInfo(`Agent loop starting (recursive): model=${opts.model}, depth=0/${MAX_RECURSION_DEPTH}, budget=${tokenBudget.formatUsage()}`);
+
+  // ── Start recursive loop ──
+  const result = await agentStep({
+    messages,
+    system: systemWithMemory,
+    depth: 0,
+    opts,
+    tokenBudget,
+    memory,
+    toolCallCounts,
+    semaphore,
+    successfulToolCalls: 0,
+    consecutiveToolErrors: 0,
+    writeToolsExecuted: 0,
+  });
+
+  return result;
+}
+
+interface StepContext {
+  messages: ChatMessage[];
+  system: string;
+  depth: number;
+  opts: AgentLoopOptions;
+  tokenBudget: TokenBudget;
+  memory: WorkingMemory;
+  toolCallCounts: Map<string, number>;
+  semaphore: ReturnType<typeof createSemaphore>;
+  successfulToolCalls: number;
+  consecutiveToolErrors: number;
+  writeToolsExecuted: number;
+}
+
+async function agentStep(ctx: StepContext): Promise<string> {
+  const { messages, system, depth, opts, tokenBudget, memory, toolCallCounts, semaphore } = ctx;
+
+  // ── Depth guard ──
+  if (depth >= MAX_RECURSION_DEPTH) {
+    logWarn(`Max recursion depth reached (${MAX_RECURSION_DEPTH}). Summarizing progress.`);
+    const summary = `Stopped after ${MAX_RECURSION_DEPTH} recursive steps.\n\nWorking memory:\n${memory.toSummary()}\n\nAsk me to continue if needed.`;
+    opts.onFinalToken?.(summary);
+    return summary;
   }
 
-  for (let step = 0; step < MAX_STEPS; step++) {
-    logDebug(`Step ${step + 1}/${MAX_STEPS} | Phase: ${currentPhase} | Memory: ${memory.getToolCallCount()} tools`);
-    phaseStepCounts[currentPhase]++;
+  // ── Consecutive error guard ──
+  if (ctx.consecutiveToolErrors >= CONSECUTIVE_ERROR_LIMIT) {
+    const msg = `Stopping: ${ctx.consecutiveToolErrors} consecutive tool errors. Too many failures — try a different approach or rephrase the task.`;
+    logWarn(msg);
+    opts.onFinalToken?.(msg);
+    return msg;
+  }
 
-    messages = compactHistory(messages);
-    messages = pruneHistory(messages);
+  logDebug(`Step ${depth + 1}/${MAX_RECURSION_DEPTH} | Budget: ${tokenBudget.formatUsage()}`);
 
-    let responseText = "";
-    let toolCalls: StructuredToolCall[] = [];
+  // ── Compact and prune history ──
+  let currentMessages = compactHistory(messages);
+  currentMessages = pruneHistory(currentMessages);
 
+  let responseText = "";
+  let toolCalls: StructuredToolCall[] = [];
+
+  // ── LLM call ──
+  try {
     const streamResult = await streamChat({
       apiKey: opts.apiKey,
       model: opts.model,
       apiUrl: opts.apiUrl,
       system,
-      messages,
+      messages: currentMessages,
       signal: opts.signal,
       onToken: (chunk) => { responseText += chunk; },
     });
@@ -287,292 +336,220 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<string> {
       return { ...tc, input: input as Record<string, unknown> };
     });
 
-    // No tool calls → model wants to answer
-    if (toolCalls.length === 0) {
-      logDebug(`No tool calls. Response: ${responseText.length} chars`);
-      const cleanedText = stripToolCallsFromText(responseText);
+    // Track token usage if available
+    if ((streamResult as any).usage) {
+      const usage = (streamResult as any).usage;
+      tokenBudget.trackUsage(opts.model, usage.promptTokens || 0, usage.completionTokens || 0);
+    }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("aborted") || msg.includes("AbortError")) {
+      logInfo("Agent loop aborted by user");
+      return "Generation stopped.";
+    }
+    logError(`LLM call failed at depth ${depth}`, err);
+    return `Error: ${msg}`;
+  }
 
-      if (!correctedFalseSuccess && successfulToolCalls === 0 && looksLikeUnverifiedWorkspaceSuccess(cleanedText)) {
-        correctedFalseSuccess = true;
-        messages.push({ role: "assistant", content: responseText });
-        messages.push({ role: "user", content: "No tool was executed. Do not claim success without running a tool." });
-        continue;
-      }
+  // ── No tool calls → LLM wants to answer ──
+  if (toolCalls.length === 0) {
+    logDebug(`No tool calls at depth ${depth + 1}. Response: ${responseText.length} chars`);
+    const cleanedText = stripToolCallsFromText(responseText);
 
-      const orphanChars = cleanedText.replace(/^[{}\s,]+|[{}\s,]+$/g, "");
-      if (orphanChars.length === 0 && responseText.includes("tool_call")) {
-        logWarn(`Malformed tool call in response`);
-        messages.push({ role: "assistant", content: responseText });
-        messages.push({
-          role: "user",
-          content: `Malformed tool call. Output ONLY: {"type":"tool_call","tool":"<name>","input":{...}}\nAvailable: ${getToolNames().join(", ")}`,
-        });
-        continue;
-      }
-
-      opts.onFinalToken?.(cleanedText);
-      return cleanedText;
+    // Check for false success (claimed without executing)
+    if (ctx.successfulToolCalls === 0 && looksLikeUnverifiedWorkspaceSuccess(cleanedText)) {
+      currentMessages.push({ role: "assistant", content: responseText });
+      currentMessages.push({ role: "user", content: "No tool was executed. Do not claim success without running a tool." });
+      return agentStep({ ...ctx, messages: currentMessages, depth: depth + 1 });
     }
 
-    toolCalls = deduplicateToolCalls(toolCalls, toolCallCounts);
-
-    // ── Loop Guard: detect consecutive duplicate tool calls ──
-    if (toolCalls.length > 0) {
-      const primary = toolCalls[0];
-      const currentKey = `${primary.toolName}:${JSON.stringify(primary.input)}`;
-      if (currentKey === lastToolCallKey && currentKey !== "") {
-        consecutiveDuplicates++;
-      } else {
-        consecutiveDuplicates = 0;
-        lastToolCallKey = currentKey;
-      }
-
-      if (consecutiveDuplicates >= 2 && !loopGuardTriggered) {
-        logWarn(`Loop guard triggered: same tool called ${consecutiveDuplicates + 1} times consecutively`);
-        loopGuardTriggered = true;
-        messages.push({
-          role: "system",
-          content: "CRITICAL: You are stuck in an execution loop calling the exact same tool with identical parameters. You must immediately HALT further tool execution and synthesize your answer now using only the information you already possess. Do NOT call any more tools.",
-        });
-        // Reset to give model one chance to respond
-        consecutiveDuplicates = 0;
-        lastToolCallKey = "";
-        continue;
-      }
-
-      if (loopGuardTriggered && consecutiveDuplicates >= 1) {
-        logWarn("Loop guard: second violation — forcing response");
-        const msg = `I'm stuck in a loop. Here's what I know so far:\n\n${memory.toSummary()}`;
-        opts.onFinalToken?.(msg);
-        return msg;
-      }
-    }
-
-    if (toolCalls.length === 0) {
-      loopGuardTriggered = false;
-      consecutiveDuplicates = 0;
-      lastToolCallKey = "";
-      messages.push({ role: "assistant", content: responseText });
-      messages.push({ role: "user", content: "You repeated an identical action. Choose a different approach or provide your analysis." });
-      continue;
-    }
-
-    // Execute tools in parallel batches
-    const batches = groupIndependent(toolCalls);
-    logDebug(`Executing ${toolCalls.length} tools in ${batches.length} batch(es)`);
-
-    for (const batch of batches) {
-      const results = await Promise.all(
-        batch.map(async (tc) => {
-          await semaphore.acquire();
-          try { return await executeSingleTool(tc, opts); }
-          finally { semaphore.release(); }
-        })
-      );
-
-      for (const { toolCall, result, retryMessages } of results) {
-        if (result.ok) { successfulToolCalls++; consecutiveToolErrors = 0; }
-        else { consecutiveToolErrors++; }
-
-        // Update working memory
-        memory.updateFromToolResult(toolCall.toolName, toolCall.input, result);
-
-        opts.onActivity?.(`${toolCall.toolName}: ${result.ok ? "done" : "failed"}`);
-        messages.push({
-          role: "user",
-          content: `RESULT(${toolCall.toolName}):${smartTruncateResult(toolCall.toolName, result)}`,
-        });
-        messages.push(...retryMessages);
-
-        // Auto-diagnostic: inject guidance when tools fail so the LLM self-corrects
-        if (!result.ok) {
-          const errorDetail = typeof result.error === "string" ? result.error : "unknown error";
-          messages.push({
-            role: "user",
-            content: `The previous tool call (${toolCall.toolName}) failed. Do not blindly retry it. ` +
-              `Read the error output above carefully. Identify the root cause (missing dependency, wrong path, ` +
-              `syntax error, permission issue, etc.), then use a DIFFERENT tool or approach to fix it. ` +
-              `If it's a command failure, diagnose the error message before retrying. ` +
-              `Error was: ${errorDetail.slice(0, 300)}`,
-          });
-        }
-      }
-    }
-
-    // ── LLM-driven phase transitions ──
-    const phaseBudget = PHASE_BUDGETS[currentPhase];
-    const phaseStepsUsed = phaseStepCounts[currentPhase];
-
-    // Check if LLM signaled a phase transition
-    const detectedPhase = detectPhaseFromResponse(responseText);
-    if (detectedPhase && phaseAllowed(currentPhase, detectedPhase)) {
-      logInfo(`LLM signaled transition: ${currentPhase} → ${detectedPhase}`);
-      currentPhase = detectedPhase;
-      phaseStepCounts[currentPhase] = 0;
-    }
-    // Budget exhausted → force transition
-    else if (phaseStepsUsed >= phaseBudget && currentPhase !== "respond") {
-      const nextPhase = currentPhase === "explore" ? "diagnose" : "respond";
-      logInfo(`Phase budget exhausted: ${currentPhase} → ${nextPhase} (used ${phaseStepsUsed}/${phaseBudget})`);
-
-      messages.push({
-        role: "system",
-        content: buildPhaseTransitionMessage(currentPhase, nextPhase, memory),
+    // Check for orphan JSON (malformed tool call)
+    const orphanChars = cleanedText.replace(/^[{}\s,]+|[{}\s,]+$/g, "");
+    if (orphanChars.length === 0 && responseText.includes("tool_call")) {
+      logWarn(`Malformed tool call at depth ${depth + 1}`);
+      currentMessages.push({ role: "assistant", content: responseText });
+      currentMessages.push({
+        role: "user",
+        content: `Malformed tool call. Output ONLY: {"type":"tool_call","tool":"<name>","input":{...}}\nAvailable: ${getToolNames().join(", ")}`,
       });
-      currentPhase = nextPhase;
-      phaseStepCounts[currentPhase] = 0;
+      return agentStep({ ...ctx, messages: currentMessages, depth: depth + 1 });
     }
 
-    if (consecutiveToolErrors >= 6) {
-      const msg = "Stopping: too many consecutive errors. Try a different approach.";
-      opts.onFinalToken?.(msg);
-      return msg;
+    opts.onFinalToken?.(cleanedText);
+    return cleanedText;
+  }
+
+  // ── Deduplicate tool calls ──
+  toolCalls = deduplicateToolCalls(toolCalls, toolCallCounts);
+
+  // ── Loop guard ──
+  const loopStatus = detectStuckLoop(toolCalls, toolCallCounts);
+  if (loopStatus === "force_stop") {
+    logWarn(`Loop guard: same tool called 3+ times consecutively — forcing response`);
+    currentMessages.push({
+      role: "user",
+      content: `CRITICAL: You are stuck in a loop. HALT tool execution and synthesize your answer now using information you already have. Working memory:\n${memory.toSummary()}`,
+    });
+    return agentStep({ ...ctx, messages: currentMessages, depth: depth + 1 });
+  }
+  if (loopStatus === "warn") {
+    logWarn(`Loop guard: same tool called 2 times consecutively`);
+    currentMessages.push({
+      role: "user",
+      content: `WARNING: You're repeating the same action. Choose a different approach or provide your analysis.`,
+    });
+    return agentStep({ ...ctx, messages: currentMessages, depth: depth + 1 });
+  }
+
+  // ── Execute tools in parallel batches ──
+  const batches = groupIndependent(toolCalls);
+  logDebug(`Executing ${toolCalls.length} tools in ${batches.length} batch(es) at depth ${depth + 1}`);
+
+  for (const batch of batches) {
+    const results = await Promise.all(
+      batch.map(async (tc) => {
+        await semaphore.acquire();
+        try { return await executeSingleTool(tc, opts); }
+        finally { semaphore.release(); }
+      })
+    );
+
+    for (const { toolCall, result } of results) {
+      if (result.ok) {
+        ctx.successfulToolCalls++;
+        ctx.consecutiveToolErrors = 0;
+      } else {
+        ctx.consecutiveToolErrors++;
+      }
+
+      // Track write tools for checkpoints
+      if (isWriteTool(toolCall.toolName) && result.ok) {
+        ctx.writeToolsExecuted++;
+        writeToolCount++;
+      }
+
+      // Update working memory
+      memory.updateFromToolResult(toolCall.toolName, toolCall.input, result);
+
+      opts.onActivity?.(`${toolCall.toolName}: ${result.ok ? "done" : "failed"}`);
+      currentMessages.push({
+        role: "user",
+        content: `RESULT(${toolCall.toolName}):${smartTruncateResult(toolCall.toolName, result)}`,
+      });
+
+      // Structured error recovery feedback
+      if (!result.ok) {
+        const errorDetail = typeof result.error === "string" ? result.error : "unknown error";
+        const env = opts.environment || await getEnvironmentContext().catch(() => undefined);
+
+        const feedback = buildErrorFeedback(toolCall.toolName, toolCall.input, errorDetail, 1, env);
+        currentMessages.push({ role: "user", content: feedback });
+
+        // Record error pattern for persistent memory
+        recordErrorPattern(`${toolCall.toolName}: ${errorDetail.slice(0, 100)}`, feedback.slice(0, 200));
+      }
     }
   }
 
-  logInfo(`Agent loop ended after ${MAX_STEPS} steps. Successful: ${successfulToolCalls}`);
-  const final = `I stopped after ${MAX_STEPS} steps. Working memory:\n\n${memory.toSummary()}\n\nAsk me to continue if you want me to keep going.`;
-  opts.onFinalToken?.(final);
-  return final;
-}
+  // ── Token budget check ──
+  const budgetCheck = tokenBudget.check();
 
-function phaseAllowed(from: AgentPhase, to: AgentPhase): boolean {
-  const order: AgentPhase[] = ["explore", "diagnose", "respond"];
-  return order.indexOf(to) > order.indexOf(from);
-}
+  if (budgetCheck.action === "warn") {
+    const warningMsg = `⚠️ Token Budget: ${tokenBudget.formatUsage()}`;
+    logWarn(warningMsg);
+    opts.onBudgetWarning?.(warningMsg);
+  }
 
-function buildPhaseTransitionMessage(from: AgentPhase, to: AgentPhase, memory: WorkingMemory): string {
-  const summary = memory.toSummary();
-  if (to === "diagnose") {
-    return [
-      `You have completed the EXPLORE phase (${memory.getToolCallCount()} tool calls).`,
-      `\nYOUR WORKING MEMORY:\n${summary}`,
-      `\nNow DIAGNOSE: Based on what you've read, what is the root cause? What needs to change?`,
-      "Form a clear hypothesis before moving on.",
-    ].join("\n");
+  if (budgetCheck.action === "pause") {
+    logWarn(`Token budget exceeded: ${tokenBudget.formatUsage()}`);
+
+    if (opts.requestBudgetApproval) {
+      const recentActions = toolCallCounts.size > 0
+        ? Array.from(toolCallCounts.entries()).slice(-5).map(([k]) => k)
+        : [];
+
+      const decision = await opts.requestBudgetApproval({
+        summary: tokenBudget.formatUsage(),
+        recentActions,
+        remaining: tokenBudget.getRemaining(),
+      });
+
+      if (decision === "stop") {
+        const summary = `Task paused — token budget exceeded.\n\n${tokenBudget.formatUsage()}\n\nWorking memory:\n${memory.toSummary()}`;
+        opts.onFinalToken?.(summary);
+        return summary;
+      }
+
+      if (decision === "increase") {
+        tokenBudget.increaseLimit(5.0);
+      }
+
+      tokenBudget.approve();
+    } else {
+      // No approval UI available — just warn and continue
+      tokenBudget.approve();
+    }
   }
-  if (to === "respond") {
-    return [
-      `You have completed the DIAGNOSE phase.`,
-      `\nYOUR WORKING MEMORY:\n${summary}`,
-      `\nNow RESPOND: Write your final analysis with the fix. Reference specific files, line numbers, and code.`,
-      "Do NOT call any more tools. Just write your answer.",
-    ].join("\n");
+
+  // ── Create git checkpoint periodically for write-heavy tasks ──
+  if (ctx.writeToolsExecuted > 0 && ctx.writeToolsExecuted % CHECKPOINT_THRESHOLD_TOOLS === 0) {
+    try {
+      const checkpoint = await createCheckpoint(`auto: ${ctx.writeToolsExecuted} write tools executed`);
+      if (checkpoint) {
+        lastCheckpoint = checkpoint;
+        logInfo(`Auto-checkpoint created: ${checkpoint.hash.slice(0, 8)}`);
+      }
+    } catch (err) {
+      logWarn(`Failed to create auto-checkpoint: ${err}`);
+    }
   }
-  return "";
+
+  // ── Record learnings from successful tool calls ──
+  if (ctx.successfulToolCalls > 0 && ctx.successfulToolCalls % 10 === 0) {
+    addLearning(
+      "pattern",
+      `Task progress: ${memory.getToolCallCount()} tool calls, ${ctx.successfulToolCalls} successful`,
+      "agent-loop",
+      0.6,
+    );
+  }
+
+  // ── RECURSE ──
+  return agentStep({
+    messages: currentMessages,
+    system,
+    depth: depth + 1,
+    opts,
+    tokenBudget,
+    memory,
+    toolCallCounts,
+    semaphore,
+    successfulToolCalls: ctx.successfulToolCalls,
+    consecutiveToolErrors: ctx.consecutiveToolErrors,
+    writeToolsExecuted: ctx.writeToolsExecuted,
+  });
 }
 
 async function executeSingleTool(
   toolCall: StructuredToolCall,
   opts: AgentLoopOptions,
-): Promise<{ toolCall: StructuredToolCall; result: ToolResult; retryMessages: ChatMessage[] }> {
+): Promise<{ toolCall: StructuredToolCall; result: ToolResult }> {
   opts.onActivity?.(`Tool: ${toolCall.toolName}`);
-
-  // Lazy-load environment context
-  const env = opts.environment || await getEnvironmentContext().catch(() => undefined);
 
   const validationError = validateToolInput(toolCall.toolName, toolCall.input);
   if (validationError) {
-    return { toolCall, result: { ok: false, error: validationError }, retryMessages: [] };
+    return { toolCall, result: { ok: false, error: validationError } };
   }
 
   logInfo(`Executing: ${toolCall.toolName}(${JSON.stringify(toolCall.input).slice(0, 200)})`);
-  let result = await executeTool(toolCall.toolName, toolCall.input, {
+  const result = await executeTool(toolCall.toolName, toolCall.input, {
     extensionContext: opts.extensionContext,
     signal: opts.signal,
     postActivity: opts.onActivity,
     requestApproval: opts.requestApproval,
   });
 
-  let retryCount = 0;
-  const retryMessages: ChatMessage[] = [];
-  while (!result.ok && retryCount < MAX_TOOL_ERROR_RETRIES) {
-    retryCount++;
-    retryMessages.push({ role: "user", content: buildRetryFeedback(toolCall.toolName, toolCall.input, result, retryCount, env) });
-
-    const retryResult = await streamChat({
-      apiKey: opts.apiKey, model: opts.model, apiUrl: opts.apiUrl,
-      system: opts.system, messages: retryMessages,
-      signal: opts.signal, onToken: () => {},
-    });
-
-    if (retryResult.toolCalls.length === 0) break;
-
-    const retryCall = retryResult.toolCalls[0];
-    let retryInput = retryCall.input;
-    if (typeof retryInput === "string") { try { retryInput = JSON.parse(retryInput); } catch {} }
-    if (!retryInput || typeof retryInput !== "object") retryInput = {};
-    retryMessages.push({ role: "assistant", content: JSON.stringify({ type: "tool_call", tool: retryCall.toolName, input: retryInput }) });
-
-    result = await executeTool(retryCall.toolName, retryInput as Record<string, unknown>, {
-      extensionContext: opts.extensionContext,
-      signal: opts.signal,
-      postActivity: opts.onActivity,
-      requestApproval: opts.requestApproval,
-    });
-
-    toolCall.toolName = retryCall.toolName;
-    toolCall.input = retryInput as Record<string, unknown>;
-  }
-
-  return { toolCall, result, retryMessages };
-}
-
-function buildToolProtocol(): string {
-  const toolNames = getToolNames().join(", ");
-  return [
-    "━━━ TOOL CALLING FORMAT ━━━",
-    "Output ONLY a JSON object when using a tool:",
-    '{"type":"tool_call","tool":"readFile","input":{"path":"src/index.ts"}}',
-    '{"type":"tool_call","tool":"searchWorkspace","input":{"query":"export function"}}',
-    "",
-    "For edits use SEARCH/REPLACE:",
-    '{"type":"tool_call","tool":"applyPatch","input":{"path":"file.ts","patch":"<<<<<<< SEARCH\\nold\\n=======\\nnew\\n>>>>>>> REPLACE"}}',
-    "",
-    "For LSP tools (more accurate than search for symbols):",
-    '{"type":"tool_call","tool":"findReferences","input":{"symbol":"handleUpload","file":"src/upload.ts"}}',
-    '{"type":"tool_call","tool":"goToDefinition","input":{"symbol":"parseCSV","file":"src/import.ts","line":78}}',
-    '{"type":"tool_call","tool":"getDocumentSymbols","input":{"file":"src/components/App.tsx"}}',
-    "",
-    `Available tools: ${toolNames}`,
-    "",
-    "IMPORTANT RULES:",
-    "1. Output ONLY valid JSON. No markdown fences, no explanation before or after.",
-    "2. Each tool call is ONE JSON object on its own line. Output multiple tool calls as separate lines.",
-    "3. Use tools to inspect files. Never guess file contents.",
-    "4. For edits: readFile first, then applyPatch with SEARCH/REPLACE.",
-    "5. For symbol lookup: prefer findReferences/goToDefinition over searchWorkspace.",
-    "6. After enough exploration, write your analysis. Don't keep searching forever.",
-    "7. NEVER repeat the same tool call with identical parameters.",
-    "8. Reference specific files and line numbers in your answer.",
-    "9. For git operations: ALWAYS use gitLog, gitStatus, gitDiff tools. Do NOT use runCommand for git.",
-    "10. If your edit broke something, use undoEdit to revert it.",
-    "11. For long commands (npm install, pytest, build): use runBackground to avoid blocking.",
-    "12. For symbol search across files: use getWorkspaceSymbols. For type info: getSignatureHelp.",
-    "13. For understanding class hierarchies: use getTypeHierarchy.",
-    "14. For refactoring suggestions: use getCodeActions.",
-    "15. SHELL RULES: On Windows (PowerShell): NEVER use && or &. Use ; to chain commands. Use the cwd parameter of runCommand to run in a subdirectory — do NOT use 'cd dir && command'.",
-    "16. When running commands in a subdirectory: use runCommand with cwd='subdirectory' parameter. Example: runCommand({ command: 'git log', cwd: 'ai-content-creator' }).",
-    "17. Always check the environment section of the system prompt to know which OS/shell you are on before running commands.",
-    "18. ALIAS WARNING: On Windows PowerShell, 'ls' and 'cat' are aliases but do NOT accept Linux flags. Never use 'ls -la', 'ls -laR', 'cat -n', 'grep -r' etc. Use PowerShell equivalents: 'Get-ChildItem -Recurse', 'Get-Content', 'Select-String'.",
-    "19. PREFERRED COMMAND STYLE: On Windows use PowerShell-native commands: Get-ChildItem (not ls), Get-Content (not cat), Select-String (not grep), Test-Path (not test). This avoids alias confusion.",
-  ].join("\n");
-}
-
-function buildRetryFeedback(toolName: string, args: Record<string, unknown>, result: ToolResult, retryCount: number, env?: EnvironmentContext): string {
-  const errorDetail = result.error ?? "Unknown error";
-  const envContext = env ? buildEnvironmentErrorContext(env, toolName, errorDetail) : "";
-
-  if (toolName === "applyPatch" && (errorDetail.includes("not found") || errorDetail.includes("SEARCH text not found"))) {
-    return `Tool ${toolName} failed (attempt ${retryCount}): ${errorDetail}\nRead the file again with readFile. Use EXACT text from the file as the SEARCH block.${envContext ? "\n" + envContext : ""}`;
-  }
-  if (toolName === "readFile") {
-    return `Tool ${toolName} failed (attempt ${retryCount}): ${errorDetail}\nCheck the path. Use listFiles to discover files.${envContext ? "\n" + envContext : ""}`;
-  }
-  if (toolName === "runCommand") {
-    return `Tool ${toolName} failed (attempt ${retryCount}): ${errorDetail}${envContext ? "\n" + envContext : "\nUse the correct shell for your platform."}`;
-  }
-  return `Tool ${toolName} failed (attempt ${retryCount}): ${errorDetail}.${envContext ? "\n" + envContext : ""} Fix and retry.`;
+  return { toolCall, result };
 }
 
 function looksLikeUnverifiedWorkspaceSuccess(text: string): boolean {

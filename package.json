@@ -89,12 +89,27 @@
           "default": true,
           "description": "Include the active file and selection as context in each message."
         },
-        "shogo.apiUrl": {
-          "type": "string",
-          "default": "",
-          "description": "Override the Shogo Cloud API base URL (leave blank to use the SDK default)."
-        }
-      }
+    "shogo.apiUrl": {
+      "type": "string",
+      "default": "",
+      "description": "Override the Shogo Cloud API base URL (leave blank to use the SDK default)."
+    },
+    "shogo.tokenBudget.enabled": {
+      "type": "boolean",
+      "default": true,
+      "description": "Enable token budget guard to prevent runaway API spend."
+    },
+    "shogo.tokenBudget.limitDollars": {
+      "type": "number",
+      "default": 5.0,
+      "description": "Maximum cost per task in USD before pausing for approval."
+    },
+    "shogo.tokenBudget.warnAtPercent": {
+      "type": "number",
+      "default": 75,
+      "description": "Show warning at N% of token budget usage."
+    }
+  }
     }
   },
   "scripts": {

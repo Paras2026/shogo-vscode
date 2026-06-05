@@ -87,6 +87,14 @@ export async function gatherSmartWorkspaceContext(userMessage: string): Promise<
 }
 
 export function buildSystemPrompt(ctx: WorkspaceContext): string {
+  // Use the new production system prompt if available
+  try {
+    const { buildFullSystemPrompt } = require("./agent/systemPrompt");
+    return buildFullSystemPrompt(ctx);
+  } catch {
+    // Fallback to legacy prompt if import fails
+  }
+
   const parts: string[] = [
     "You are Shogo, an AI coding assistant in VS Code. Answer concisely. Use Markdown with fenced code blocks.",
     "When editing files, you MUST read them first. Never guess file contents.",
