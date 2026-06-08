@@ -1,0 +1,493 @@
+{
+  "generatedAt": 1780644772293,
+  "workspaceRoot": "c:\\Users\\joshi\\Desktop\\ODIN AI\\extension",
+  "fileCount": 47,
+  "totalLines": 14009,
+  "files": [
+    {
+      "path": "esbuild.js",
+      "lines": 47,
+      "symbols": [],
+      "language": "javascript"
+    },
+    {
+      "path": "media\\main.css",
+      "lines": 515,
+      "symbols": [],
+      "language": "css"
+    },
+    {
+      "path": "media\\main.js",
+      "lines": 447,
+      "symbols": [],
+      "language": "javascript"
+    },
+    {
+      "path": "package-lock.json",
+      "lines": 3257,
+      "symbols": [],
+      "language": "json"
+    },
+    {
+      "path": "package.json",
+      "lines": 133,
+      "symbols": [],
+      "language": "json"
+    },
+    {
+      "path": "README.md",
+      "lines": 305,
+      "symbols": [],
+      "language": "markdown"
+    },
+    {
+      "path": "src\\agent\\agentLoop.ts",
+      "lines": 617,
+      "symbols": [
+        "runAgentLoop",
+        "AgentLoopOptions"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\agent\\errorRecovery.ts",
+      "lines": 225,
+      "symbols": [
+        "analyzeToolError",
+        "buildErrorFeedback",
+        "ErrorCategory",
+        "ErrorAnalysis"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\agent\\projectMemory.ts",
+      "lines": 233,
+      "symbols": [
+        "loadProjectMemory",
+        "saveProjectMemory",
+        "addLearning",
+        "recordErrorPattern",
+        "formatMemoryForContext",
+        "resetMemoryCache",
+        "Learning",
+        "ProjectMemoryData",
+        "ErrorPattern"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\agent\\systemPrompt.ts",
+      "lines": 401,
+      "symbols": [
+        "buildFullSystemPrompt",
+        "estimateSystemPromptTokens"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\agent\\tokenBudget.ts",
+      "lines": 195,
+      "symbols": [
+        "TokenBudget",
+        "MODEL_PRICING",
+        "BudgetConfig",
+        "Usage",
+        "BudgetCheckResult",
+        "BudgetSummary"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\agent\\toolDefinitions.ts",
+      "lines": 425,
+      "symbols": [
+        "TOOL_DEFINITIONS"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\agent\\toolRegistry.ts",
+      "lines": 193,
+      "symbols": [
+        "validateToolInput",
+        "getToolDescriptions",
+        "executeTool",
+        "getToolNames"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\agent\\types.ts",
+      "lines": 34,
+      "symbols": [
+        "ApprovalKind",
+        "ToolResult",
+        "ToolDefinition",
+        "ApprovalRequest",
+        "ToolExecutionContext"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\agent\\workingMemory.ts",
+      "lines": 255,
+      "symbols": [
+        "WorkingMemory",
+        "FindingPriority",
+        "FileSummary",
+        "SearchResult",
+        "PrioritizedFinding",
+        "WorkingMemoryData"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\auth.ts",
+      "lines": 44,
+      "symbols": [
+        "getApiKey",
+        "setApiKey",
+        "clearApiKey"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\context\\backgroundIndexer.ts",
+      "lines": 355,
+      "symbols": [
+        "loadProjectMap",
+        "getProjectMap",
+        "initBackgroundIndexer",
+        "disposeBackgroundIndexer",
+        "ProjectMapEntry",
+        "ProjectMap"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\context\\environmentContext.ts",
+      "lines": 240,
+      "symbols": [
+        "getEnvironmentContext",
+        "formatEnvironmentForPrompt",
+        "buildEnvironmentErrorContext",
+        "EnvironmentContext"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\context\\projectIndexer.ts",
+      "lines": 215,
+      "symbols": [
+        "getProjectStructure",
+        "projectTreeToString",
+        "flattenProjectTree",
+        "ProjectNode"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\context\\smartContext.ts",
+      "lines": 237,
+      "symbols": [
+        "gatherSmartContext",
+        "SmartContextResult",
+        "FileReference",
+        "GitChange"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\context.ts",
+      "lines": 182,
+      "symbols": [
+        "gatherContext",
+        "gatherSmartWorkspaceContext",
+        "buildSystemPrompt",
+        "WorkspaceContext"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\extension.ts",
+      "lines": 80,
+      "symbols": [
+        "activate"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\intelligence\\astIndex.ts",
+      "lines": 414,
+      "symbols": [
+        "getCodeIndex",
+        "findSymbolsByName",
+        "findDependenciesOf",
+        "findDependentsOf",
+        "symbolsToString",
+        "CodeSymbol",
+        "DependencyEdge",
+        "CodeIndex"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\intelligence\\codeGraph.ts",
+      "lines": 380,
+      "symbols": [
+        "buildCallGraph",
+        "findImpact",
+        "findDeadCode",
+        "findCallChains",
+        "GraphNode",
+        "GraphEdge",
+        "CallGraph",
+        "ImpactResult",
+        "DeadCodeResult",
+        "CallChain"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\intelligence\\treeSitter.ts",
+      "lines": 249,
+      "symbols": [
+        "parseFileRegex",
+        "getFileIndex",
+        "clearFileIndexCache",
+        "getFileIndexStats",
+        "AstSymbol",
+        "AstIndex"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\logger.ts",
+      "lines": 81,
+      "symbols": [
+        "initLogger",
+        "logInfo",
+        "logWarn",
+        "logError",
+        "logDebug",
+        "getLogFile",
+        "showOutputChannel"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\safety\\commandPolicy.ts",
+      "lines": 82,
+      "symbols": [
+        "classifyCommand",
+        "CommandDecision"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\shogoClient.ts",
+      "lines": 434,
+      "symbols": [
+        "streamChat",
+        "stripToolCallsFromText",
+        "ChatMessage",
+        "StructuredToolCall",
+        "StreamResult",
+        "StreamOptions"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\ShogoViewProvider.ts",
+      "lines": 503,
+      "symbols": [
+        "ShogoViewProvider"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\tools\\backgroundTerminal.ts",
+      "lines": 163,
+      "symbols": [
+        "killBackgroundJobs",
+        "getBackgroundJobs",
+        "runBackgroundTool",
+        "backgroundStatusTool"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\tools\\codeGraphTools.ts",
+      "lines": 249,
+      "symbols": [
+        "buildCallGraphTool",
+        "impactAnalysisTool",
+        "deadCodeTool",
+        "callChainTool"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\tools\\codeIndexTools.ts",
+      "lines": 114,
+      "symbols": [
+        "codeIndexTool",
+        "dependencyGraphTool"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\tools\\commandHistory.ts",
+      "lines": 53,
+      "symbols": [
+        "commandHistoryTool"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\tools\\diagnostics.ts",
+      "lines": 62,
+      "symbols": [
+        "getDiagnosticsTool"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\tools\\editTools.ts",
+      "lines": 353,
+      "symbols": [
+        "getUndoStack",
+        "summarizeToolData",
+        "suggestRelatedFiles",
+        "applyPatchTool",
+        "writeFileTool",
+        "undoEditTool"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\tools\\enhancedLspTools.ts",
+      "lines": 326,
+      "symbols": [
+        "getSignatureHelpTool",
+        "getCodeActionsTool",
+        "getWorkspaceSymbolsTool",
+        "getTypeHierarchyTool"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\tools\\fileTools.ts",
+      "lines": 262,
+      "symbols": [
+        "listFilesTool",
+        "readFileTool",
+        "searchWorkspaceTool"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\tools\\gitCheckpoint.ts",
+      "lines": 171,
+      "symbols": [
+        "isGitRepo",
+        "initGitRepo",
+        "createCheckpoint",
+        "rollbackToCheckpoint",
+        "Checkpoint"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\tools\\gitTools.ts",
+      "lines": 166,
+      "symbols": [
+        "gitStatusTool",
+        "gitDiffTool",
+        "gitLogTool"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\tools\\lspTools.ts",
+      "lines": 301,
+      "symbols": [
+        "findReferencesTool",
+        "goToDefinitionTool",
+        "getSymbolInfoTool",
+        "getDocumentSymbolsTool"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\tools\\projectMap.ts",
+      "lines": 172,
+      "symbols": [
+        "projectMapTool"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\tools\\runCommand.ts",
+      "lines": 449,
+      "symbols": [
+        "getCommandHistory",
+        "runCommandTool"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\tools\\shadowWorkspace.ts",
+      "lines": 216,
+      "symbols": [
+        "getShadowRoot",
+        "initShadowWorkspace",
+        "clearShadowWorkspace",
+        "shadowFile",
+        "updateShadow",
+        "isShadowed",
+        "getShadowContent",
+        "reviewShadowChanges",
+        "ShadowEntry"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "src\\tools\\workspace.ts",
+      "lines": 118,
+      "symbols": [
+        "getWorkspaceRoot",
+        "resolveWorkspacePath",
+        "normalizeRelativePath",
+        "assertSafeRelativePath",
+        "isLikelyTextFile",
+        "truncateText",
+        "asRelative",
+        "getWorkspaceRootPath",
+        "resolveAbsolutePath",
+        "truncateTerminalError"
+      ],
+      "language": "typescript"
+    },
+    {
+      "path": "stubs\\empty-obj.js",
+      "lines": 2,
+      "symbols": [],
+      "language": "javascript"
+    },
+    {
+      "path": "stubs\\empty.js",
+      "lines": 36,
+      "symbols": [],
+      "language": "javascript"
+    },
+    {
+      "path": "tsconfig.json",
+      "lines": 18,
+      "symbols": [],
+      "language": "json"
+    }
+  ],
+  "directoryTree": "├── README.md\n├── esbuild.js\n├── media\n│   ├── main.css\n│   └── main.js\n├── package-lock.json\n├── package.json\n├── src\n│   ├── ShogoViewProvider.ts\n│   ├── agent\n│   │   ├── agentLoop.ts\n│   │   ├── errorRecovery.ts\n│   │   ├── projectMemory.ts\n│   │   ├── systemPrompt.ts\n│   │   ├── tokenBudget.ts\n│   │   ├── toolDefinitions.ts\n│   │   ├── toolRegistry.ts\n│   │   ├── types.ts\n│   │   └── workingMemory.ts\n│   ├── auth.ts\n│   ├── context\n│   │   ├── backgroundIndexer.ts\n│   │   ├── environmentContext.ts\n│   │   ├── projectIndexer.ts\n│   │   └── smartContext.ts\n│   ├── context.ts\n│   ├── extension.ts\n│   ├── intelligence\n│   │   ├── astIndex.ts\n│   │   ├── codeGraph.ts\n│   │   └── treeSitter.ts\n│   ├── logger.ts\n│   ├── safety\n│   │   └── commandPolicy.ts\n│   ├── shogoClient.ts\n│   └── tools\n│       ├── backgroundTerminal.ts\n│       ├── codeGraphTools.ts\n│       ├── codeIndexTools.ts\n│       ├── commandHistory.ts\n│       ├── diagnostics.ts\n│       ├── editTools.ts\n│       ├── enhancedLspTools.ts\n│       ├── fileTools.ts\n│       ├── gitCheckpoint.ts\n│       ├── gitTools.ts\n│       ├── lspTools.ts\n│       ├── projectMap.ts\n│       ├── runCommand.ts\n│       ├── shadowWorkspace.ts\n│       └── workspace.ts\n├── stubs\n│   ├── empty-obj.js\n│   └── empty.js\n└── tsconfig.json"
+}

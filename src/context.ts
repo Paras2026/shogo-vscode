@@ -8,6 +8,7 @@ export interface WorkspaceContext {
   workspaceName?: string;
   filePath?: string;
   language?: string;
+  selections?: string;
   selection?: string;
   fullText?: string;
   smartContext?: SmartContextResult;
